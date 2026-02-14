@@ -27,6 +27,7 @@ export class LLMClient {
   private model: string;
   private temperature: number;
   private maxTokens: number;
+  private activeAbortController: AbortController | null = null;
 
   constructor(options: LLMClientOptions) {
     this.client = new OpenAI({
@@ -59,8 +60,13 @@ export class LLMClient {
       params.tool_choice = 'auto';
     }
 
+    const abortController = new AbortController();
+    this.activeAbortController = abortController;
+
     try {
-      const stream = await this.client.chat.completions.create(params);
+      const stream = await this.client.chat.completions.create(params, {
+        signal: abortController.signal,
+      });
 
       let contentParts: string[] = [];
       const toolCallMap = new Map<number, { id: string; name: string; args: string }>();
@@ -134,8 +140,14 @@ export class LLMClient {
       return assistantMessage;
     } catch (error) {
       const err = error instanceof Error ? error : new Error(String(error));
-      callbacks.onError?.(err);
+      if (!isAbortError(err)) {
+        callbacks.onError?.(err);
+      }
       throw err;
+    } finally {
+      if (this.activeAbortController === abortController) {
+        this.activeAbortController = null;
+      }
     }
   }
 
@@ -188,6 +200,28 @@ export class LLMClient {
   get modelName(): string {
     return this.model;
   }
+
+  abortActiveStream(): void {
+    if (this.activeAbortController) {
+      this.activeAbortController.abort();
+      this.activeAbortController = null;
+    }
+  }
+}
+
+export function isAbortError(error: unknown): boolean {
+  if (!error) return false;
+  const err = error as { name?: string; message?: string; code?: string; cause?: { name?: string; code?: string } };
+  const name = err.name || err.cause?.name || '';
+  const code = err.code || err.cause?.code || '';
+  const message = err.message || '';
+
+  return (
+    name === 'AbortError' ||
+    name === 'APIUserAbortError' ||
+    code === 'ABORT_ERR' ||
+    /abort|aborted|cancel|cancelled|canceled|interrupted/i.test(message)
+  );
 }
 
 /**

@@ -63,6 +63,7 @@ export class Orchestrator {
   private baseSystemPrompt: string;
   private memoStore?: MemoStore;
   private readTracker = new ReadTracker();
+  private interrupted = false;
 
   constructor(
     registry: ToolRegistry,
@@ -179,12 +180,14 @@ export class Orchestrator {
    * 执行用户请求
    */
   async run(userMessage: string, callbacks: OrchestratorCallbacks = {}): Promise<string> {
+    this.interrupted = false;
     callbacks.onModeInfo?.(this.mode);
     this.conversation.addUserMessage(userMessage);
 
     let lastContent = '';
 
     while (true) {
+      if (this.interrupted) break;
       const tools = this.getTools();
 
       const assistantMsg = await this.orchestratorClient.chatStream(
@@ -203,6 +206,7 @@ export class Orchestrator {
 
       // 处理工具调用
       for (const toolCall of assistantMsg.tool_calls) {
+        if (this.interrupted) break;
         const toolName = toolCall.function.name;
         let params: Record<string, unknown>;
         try {
@@ -298,6 +302,7 @@ export class Orchestrator {
    * 调用编码者 Agent
    */
   private async invokeCoder(task: string, context: string | undefined, callbacks: OrchestratorCallbacks): Promise<string> {
+    if (this.interrupted) return '';
     callbacks.onCoderStart?.();
 
     const modeInfo = getMode(this.mode);
@@ -340,6 +345,12 @@ export class Orchestrator {
 
     callbacks.onCoderEnd?.(response);
     return response;
+  }
+
+  interrupt(): void {
+    this.interrupted = true;
+    this.orchestratorClient.abortActiveStream();
+    this.coderClient.abortActiveStream();
   }
 
   /**

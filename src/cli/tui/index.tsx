@@ -72,7 +72,10 @@ export async function startTui(options: TuiOptions): Promise<void> {
       memoStore={memoStore}
       subAgentTracker={subAgentTracker}
     />,
-    { patchConsole: true },
+    {
+      patchConsole: true,
+      exitOnCtrlC: false,
+    },
   );
 
   await waitUntilExit();

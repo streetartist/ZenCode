@@ -1,20 +1,41 @@
-import React, { useState } from 'react';
+import React, { useRef, useState } from 'react';
 import { Box, Text, useInput } from 'ink';
 
 interface InputAreaProps {
   onSubmit: (text: string) => void;
   isRunning: boolean;
+  onExitRequest: () => void;
 }
 
 /**
  * Custom text input that only accepts printable characters.
  * Immune to mouse/terminal escape sequence leaks.
  */
-function CleanTextInput({ onSubmit, placeholder }: { onSubmit: (text: string) => void; placeholder?: string }) {
+function CleanTextInput({ onSubmit, placeholder, onExitRequest }: { onSubmit: (text: string) => void; placeholder?: string; onExitRequest: () => void }) {
   const [value, setValue] = useState('');
   const [cursor, setCursor] = useState(0);
+  const lastCtrlCAtRef = useRef(0);
 
   useInput((input, key) => {
+    if (input === 'c' && key.ctrl) {
+      if (value.length > 0) {
+        setValue('');
+        setCursor(0);
+        lastCtrlCAtRef.current = 0;
+        return;
+      }
+
+      const now = Date.now();
+      const isDoublePress = now - lastCtrlCAtRef.current <= 1200;
+      if (isDoublePress) {
+        onExitRequest();
+        lastCtrlCAtRef.current = 0;
+      } else {
+        lastCtrlCAtRef.current = now;
+      }
+      return;
+    }
+
     if (key.return) {
       const trimmed = value.trim();
       if (trimmed) {
@@ -75,7 +96,7 @@ function CleanTextInput({ onSubmit, placeholder }: { onSubmit: (text: string) =>
   );
 }
 
-export function InputArea({ onSubmit, isRunning }: InputAreaProps) {
+export function InputArea({ onSubmit, isRunning, onExitRequest }: InputAreaProps) {
   return (
     <Box paddingX={1}>
       <Text color={isRunning ? 'gray' : 'green'} bold>&gt; </Text>
@@ -85,6 +106,7 @@ export function InputArea({ onSubmit, isRunning }: InputAreaProps) {
         <CleanTextInput
           onSubmit={onSubmit}
           placeholder="输入消息或 /命令..."
+          onExitRequest={onExitRequest}
         />
       )}
     </Box>

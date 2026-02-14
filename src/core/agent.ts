@@ -30,6 +30,7 @@ export class Agent {
   private fixedTools?: ToolDefinition[];
   private memoStore?: MemoStore;
   private readTracker = new ReadTracker();
+  private interrupted = false;
 
   constructor(
     client: LLMClient,
@@ -52,11 +53,13 @@ export class Agent {
    * 执行一轮完整的 agent 循环
    */
   async run(userMessage: string, callbacks: AgentCallbacks = {}): Promise<string> {
+    this.interrupted = false;
     this.conversation.addUserMessage(userMessage);
 
     let lastContent = '';
 
     while (true) {
+      if (this.interrupted) break;
       // 每轮动态获取工具列表，确保 /parallel /todo 等切换生效
       const tools = this.fixedTools || this.registry.toToolDefinitions();
 
@@ -77,6 +80,7 @@ export class Agent {
 
       // 执行所有工具调用
       for (const toolCall of assistantMsg.tool_calls) {
+        if (this.interrupted) break;
         const toolName = toolCall.function.name;
         let params: Record<string, unknown>;
         try {
@@ -160,6 +164,11 @@ export class Agent {
     }
 
     return lastContent;
+  }
+
+  interrupt(): void {
+    this.interrupted = true;
+    this.client.abortActiveStream();
   }
 
   /**

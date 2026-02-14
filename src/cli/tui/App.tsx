@@ -7,7 +7,7 @@ import type { ToolRegistry } from '../../tools/registry.js';
 import type { TodoStore } from '../../core/todo-store.js';
 import type { MemoStore } from '../../core/memo-store.js';
 import type { SubAgentTracker } from '../../core/sub-agent-tracker.js';
-import type { LLMClient } from '../../llm/client.js';
+import { isAbortError, type LLMClient } from '../../llm/client.js';
 import { setStructuredConfirmHandler } from '../../tools/permission.js';
 import type { ConfirmExecutionResult } from '../../tools/permission.js';
 import { tuiReducer, createInitialState, type TuiAction, type ConfirmPending, type ConfirmResult } from './state.js';
@@ -43,6 +43,7 @@ export function App({ config, client, agent, orchestrator, registry, todoStore, 
 
   // Reset counter: forces full re-mount when /clear is used (like kilocode)
   const [resetKey, setResetKey] = useState(0);
+  const currentCallbacksRef = useRef<(ReturnType<typeof createBridgeCallbacks> & { _stopBatcher?: () => void }) | null>(null);
 
   const agentRef = useRef(agent);
   const orchestratorRef = useRef(orchestrator);
@@ -136,6 +137,7 @@ export function App({ config, client, agent, orchestrator, registry, todoStore, 
     dispatch({ type: 'SET_RUNNING', running: true });
 
     const callbacks = createBridgeCallbacks(dispatch);
+    currentCallbacksRef.current = callbacks as ReturnType<typeof createBridgeCallbacks> & { _stopBatcher?: () => void };
 
     try {
       if (config.agent_mode === 'single') {
@@ -144,8 +146,12 @@ export function App({ config, client, agent, orchestrator, registry, todoStore, 
         await orchestratorRef.current.run(text, callbacks as unknown as OrchestratorCallbacks);
       }
     } catch (err) {
-      const msg = err instanceof Error ? err.message : String(err);
-      dispatch({ type: 'SET_ERROR', error: msg });
+      if (!isAbortError(err)) {
+        const msg = err instanceof Error ? err.message : String(err);
+        dispatch({ type: 'SET_ERROR', error: msg });
+      }
+    } finally {
+      currentCallbacksRef.current = null;
     }
 
     (callbacks as any)._stopBatcher?.();
@@ -175,14 +181,26 @@ export function App({ config, client, agent, orchestrator, registry, todoStore, 
 
   // --- Keyboard shortcuts ---
   useInput((input, key) => {
-    if (input === 'c' && key.ctrl) {
+    if (key.escape) {
       if (state.isRunning) {
+        agentRef.current.interrupt();
+        orchestratorRef.current.interrupt();
+        currentCallbacksRef.current?._stopBatcher?.();
         dispatch({ type: 'SET_RUNNING', running: false });
         dispatch({ type: 'FINISH_STREAMING' });
-      } else {
-        process.exit(0);
       }
       return;
+    }
+
+    if (input === 'c' && key.ctrl) {
+      if (state.isRunning) {
+        agentRef.current.interrupt();
+        orchestratorRef.current.interrupt();
+        currentCallbacksRef.current?._stopBatcher?.();
+        dispatch({ type: 'SET_RUNNING', running: false });
+        dispatch({ type: 'FINISH_STREAMING' });
+        return;
+      }
     }
     if (input === 'd' && key.ctrl) {
       process.exit(0);
@@ -226,6 +244,7 @@ export function App({ config, client, agent, orchestrator, registry, todoStore, 
       <InputArea
         onSubmit={handleSubmit}
         isRunning={state.isRunning || !!confirmPending}
+        onExitRequest={() => process.exit(0)}
       />
 
       {/* Status bar */}

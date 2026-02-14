@@ -86,6 +86,21 @@ function truncateCode(code: string, maxLines: number): string {
   return lines.slice(0, maxLines).join('\n') + `\n... (共 ${lines.length} 行)`;
 }
 
+function sanitizePreviewLine(line: string): string {
+  return line
+    .replace(/\x1B\[[0-?]*[ -/]*[@-~]/g, '')
+    .replace(/\r/g, '')
+    .replace(/\t/g, '  ');
+}
+
+function buildPreviewLines(text: string, maxLines = 5): string[] {
+  return text
+    .split('\n')
+    .slice(0, maxLines)
+    .map(sanitizePreviewLine)
+    .map((line) => line.length > 90 ? `${line.slice(0, 90)}...` : line);
+}
+
 /**
  * 工具完成后的完整显示（用于 Static 区域）
  * 显示 ✓/✗ 状态 + 工具信息 + 结果预览
@@ -98,6 +113,9 @@ export function ToolCallLine({ toolCall }: ToolCallLineProps) {
 
   const isWriteTool = name === 'write-file' || name === 'edit-file';
   const rawCode = isWriteTool && status === 'done' ? getCodeContent(name, params) : null;
+  const previewLines = status === 'done' && !isWriteTool && resultContent
+    ? buildPreviewLines(resultContent)
+    : [];
 
   let statusNode: React.ReactNode;
   let statusText = '';
@@ -137,15 +155,11 @@ export function ToolCallLine({ toolCall }: ToolCallLineProps) {
       )}
 
       {/* 非写入工具的结果预览（完成后显示） */}
-      {status === 'done' && !isWriteTool && resultContent && (
-        <Box
-          marginLeft={3}
-          marginTop={0}
-          borderStyle="single"
-          borderColor="gray"
-          paddingX={1}
-        >
-          <Text dimColor>{resultContent}</Text>
+      {status === 'done' && !isWriteTool && previewLines.length > 0 && (
+        <Box marginLeft={3} marginTop={0} flexDirection="column">
+          {previewLines.map((line, idx) => (
+            <Text key={`preview-${idx}`} dimColor>{`  ${line}`}</Text>
+          ))}
         </Box>
       )}
 

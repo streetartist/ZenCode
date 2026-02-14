@@ -8,17 +8,79 @@ import type { TuiAction } from './state.js';
 
 const BATCH_INTERVAL_MS = 64; // ~15fps, balances smoothness vs flicker for fullscreen redraw
 
-const THINK_BORDER = '─'.repeat(40);
+const THINK_TITLE = '💭 Thinking';
+const ANSI_GRAY = '\x1b[90m';
+const ANSI_RESET = '\x1b[0m';
+
+function gray(text: string): string {
+  return `${ANSI_GRAY}${text}${ANSI_RESET}`;
+}
+
+function renderThinkLine(text: string): string {
+  return text.length > 0 ? `${gray(`  ${text}`)}\n` : '\n';
+}
 
 /**
  * 流式 <think> 标签转换器
- * 圆角边框包裹 thinking 内容，左侧 │ 前缀标识每行
+ * 轻量样式：标题 + 缩进内容（无边框）
  */
 export function createThinkFilter() {
   let inThink = false;
   let tagBuffer = '';
-  let lineStart = true;
+  let thinkLineBuffer = '';
+  let thinkHasVisibleContent = false;
+  let thinkLastEmittedBlank = false;
   let postThink = false;  // 跳过 </think> 后的空行
+
+  function flushThinkLine(rawLine: string): string {
+    const normalized = rawLine.trim();
+
+    // 丢弃 think 开头的空行
+    if (!thinkHasVisibleContent && normalized.length === 0) {
+      return '';
+    }
+
+    if (normalized.length === 0) {
+      // 连续空行折叠为一行
+      if (thinkLastEmittedBlank) return '';
+      thinkLastEmittedBlank = true;
+      return '\n';
+    }
+
+    thinkHasVisibleContent = true;
+    thinkLastEmittedBlank = false;
+    return renderThinkLine(normalized);
+  }
+
+  function appendOutsideText(current: string, text: string): string {
+    if (!postThink) return current + text;
+    let result = current;
+    for (let i = 0; i < text.length; i++) {
+      const ch = text[i]!;
+      if (postThink && (ch === '\n' || ch === '\r' || ch === ' ' || ch === '\t')) {
+        continue;
+      }
+      postThink = false;
+      result += text.slice(i);
+      break;
+    }
+    return result;
+  }
+
+  function appendThinkText(current: string, text: string): string {
+    let result = current;
+    for (let i = 0; i < text.length; i++) {
+      const ch = text[i]!;
+      if (ch === '\r') continue;
+      if (ch === '\n') {
+        result += flushThinkLine(thinkLineBuffer);
+        thinkLineBuffer = '';
+      } else {
+        thinkLineBuffer += ch;
+      }
+    }
+    return result;
+  }
 
   return function filter(text: string): string {
     let result = '';
@@ -29,17 +91,30 @@ export function createThinkFilter() {
         tagBuffer += ch;
         if (tagBuffer === '<think>') {
           inThink = true;
-          lineStart = true;
+          thinkLineBuffer = '';
+          thinkHasVisibleContent = false;
+          thinkLastEmittedBlank = false;
           tagBuffer = '';
-          result += `╭─ 💭 ${THINK_BORDER}\n`;
+          result += `${gray(THINK_TITLE)}\n`;
         } else if (tagBuffer === '</think>') {
           inThink = false;
           postThink = true;
           tagBuffer = '';
-          result += `\n╰${THINK_BORDER}───\n\n`;
+          if (thinkLineBuffer.length > 0) {
+            result += flushThinkLine(thinkLineBuffer);
+            thinkLineBuffer = '';
+          }
+          // 丢弃 think 结尾空行
+          while (result.endsWith('\n\n\n')) {
+            result = result.slice(0, -1);
+          }
+          result += '\n';
         } else if (!'<think>'.startsWith(tagBuffer) && !'</think>'.startsWith(tagBuffer)) {
-          if (inThink && lineStart) { result += '│ '; lineStart = false; }
-          result += tagBuffer;
+          if (inThink) {
+            result = appendThinkText(result, tagBuffer);
+          } else {
+            result = appendOutsideText(result, tagBuffer);
+          }
           tagBuffer = '';
         }
         continue;
@@ -51,16 +126,9 @@ export function createThinkFilter() {
       }
 
       if (inThink) {
-        if (lineStart) { result += '│ '; lineStart = false; }
-        result += ch;
-        if (ch === '\n') { lineStart = true; }
+        result = appendThinkText(result, ch);
       } else {
-        // 跳过 </think> 后的空行直到正文
-        if (postThink) {
-          if (ch === '\n' || ch === '\r' || ch === ' ' || ch === '\t') continue;
-          postThink = false;
-        }
-        result += ch;
+        result = appendOutsideText(result, ch);
       }
     }
     return result;
