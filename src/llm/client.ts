@@ -1,0 +1,198 @@
+import OpenAI from 'openai';
+import type {
+  Message,
+  ToolDefinition,
+  ToolCall,
+  StreamDelta,
+} from './types.js';
+
+export interface LLMClientOptions {
+  apiKey: string;
+  baseURL: string;
+  model: string;
+  temperature?: number;
+  maxTokens?: number;
+}
+
+export interface StreamCallbacks {
+  onContent?: (text: string) => void;
+  onToolCall?: (toolCall: ToolCall) => void;
+  onToolCallStreaming?: (index: number, name: string, accumulatedArgs: string) => void;
+  onFinish?: (message: Message) => void;
+  onError?: (error: Error) => void;
+}
+
+export class LLMClient {
+  private client: OpenAI;
+  private model: string;
+  private temperature: number;
+  private maxTokens: number;
+
+  constructor(options: LLMClientOptions) {
+    this.client = new OpenAI({
+      apiKey: options.apiKey,
+      baseURL: options.baseURL,
+    });
+    this.model = options.model;
+    this.temperature = options.temperature ?? 0.7;
+    this.maxTokens = options.maxTokens ?? 8192;
+  }
+
+  /**
+   * 流式调用 LLM，实时回调文本内容和工具调用
+   */
+  async chatStream(
+    messages: Message[],
+    tools: ToolDefinition[] | undefined,
+    callbacks: StreamCallbacks,
+  ): Promise<Message> {
+    const params: OpenAI.Chat.ChatCompletionCreateParamsStreaming = {
+      model: this.model,
+      messages: messages as OpenAI.Chat.ChatCompletionMessageParam[],
+      temperature: this.temperature,
+      max_tokens: this.maxTokens,
+      stream: true,
+    };
+
+    if (tools && tools.length > 0) {
+      params.tools = tools as OpenAI.Chat.ChatCompletionTool[];
+      params.tool_choice = 'auto';
+    }
+
+    try {
+      const stream = await this.client.chat.completions.create(params);
+
+      let contentParts: string[] = [];
+      const toolCallMap = new Map<number, { id: string; name: string; args: string }>();
+
+      for await (const chunk of stream) {
+        const choice = chunk.choices[0];
+        if (!choice) continue;
+
+        const delta: StreamDelta = choice.delta as StreamDelta;
+
+        // 处理文本内容
+        if (delta.content) {
+          contentParts.push(delta.content);
+          callbacks.onContent?.(delta.content);
+        }
+
+        // 处理工具调用（流式中分片到达）
+        if (delta.tool_calls) {
+          for (const tc of delta.tool_calls) {
+            const existing = toolCallMap.get(tc.index);
+            if (existing) {
+              if (tc.function?.arguments) {
+                existing.args += tc.function.arguments;
+              }
+            } else {
+              toolCallMap.set(tc.index, {
+                id: tc.id || '',
+                name: tc.function?.name || '',
+                args: tc.function?.arguments || '',
+              });
+            }
+
+            // 流式回调：write-file / edit-file 的参数实时推送
+            const entry = toolCallMap.get(tc.index);
+            if (entry && callbacks.onToolCallStreaming) {
+              const n = entry.name;
+              if (n === 'write-file' || n === 'edit-file') {
+                callbacks.onToolCallStreaming(tc.index, n, entry.args);
+              }
+            }
+          }
+        }
+      }
+
+      // 组装完整的 tool_calls
+      const toolCalls: ToolCall[] = [];
+      for (const [, tc] of [...toolCallMap.entries()].sort(([a], [b]) => a - b)) {
+        const toolCall: ToolCall = {
+          id: tc.id,
+          type: 'function',
+          function: {
+            name: tc.name,
+            arguments: tc.args,
+          },
+        };
+        toolCalls.push(toolCall);
+        callbacks.onToolCall?.(toolCall);
+      }
+
+      const fullContent = contentParts.join('');
+      const assistantMessage: Message = {
+        role: 'assistant',
+        content: fullContent || null,
+      };
+
+      if (toolCalls.length > 0) {
+        assistantMessage.tool_calls = toolCalls;
+      }
+
+      callbacks.onFinish?.(assistantMessage);
+      return assistantMessage;
+    } catch (error) {
+      const err = error instanceof Error ? error : new Error(String(error));
+      callbacks.onError?.(err);
+      throw err;
+    }
+  }
+
+  /**
+   * 非流式调用 LLM
+   */
+  async chat(
+    messages: Message[],
+    tools?: ToolDefinition[],
+  ): Promise<Message> {
+    const params: OpenAI.Chat.ChatCompletionCreateParamsNonStreaming = {
+      model: this.model,
+      messages: messages as OpenAI.Chat.ChatCompletionMessageParam[],
+      temperature: this.temperature,
+      max_tokens: this.maxTokens,
+      stream: false,
+    };
+
+    if (tools && tools.length > 0) {
+      params.tools = tools as OpenAI.Chat.ChatCompletionTool[];
+      params.tool_choice = 'auto';
+    }
+
+    const response = await this.client.chat.completions.create(params);
+    const choice = response.choices[0];
+    if (!choice) {
+      throw new Error('No response from LLM');
+    }
+
+    const msg = choice.message;
+    const result: Message = {
+      role: 'assistant',
+      content: msg.content,
+    };
+
+    if (msg.tool_calls && msg.tool_calls.length > 0) {
+      result.tool_calls = msg.tool_calls.map((tc) => ({
+        id: tc.id,
+        type: 'function' as const,
+        function: {
+          name: tc.function.name,
+          arguments: tc.function.arguments,
+        },
+      }));
+    }
+
+    return result;
+  }
+
+  get modelName(): string {
+    return this.model;
+  }
+}
+
+/**
+ * 从配置创建 LLM 客户端
+ */
+export function createLLMClient(options: LLMClientOptions): LLMClient {
+  return new LLMClient(options);
+}

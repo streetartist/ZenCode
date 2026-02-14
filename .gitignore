@@ -1,0 +1,45 @@
+# Dependencies
+node_modules
+.pnpm
+
+# Build outputs
+dist
+*.tsbuildinfo
+
+# Environment variables and secrets
+.env
+.env.local
+.env.*.local
+
+# Config files with sensitive data
+.zencode/config.yaml
+.zencode/
+
+# IDE
+.vscode/*
+!.vscode/extensions.json
+.idea
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
+npm-debug.log*
+
+# Testing
+coverage
+
+# Demo/test files
+demo/
+
+# Python cache
+__pycache__
+*.pyc
+*.pyo
+*.pyd
+.Python

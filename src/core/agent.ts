@@ -1,0 +1,171 @@
+import type { ZenCodeConfig } from '../config/types.js';
+import type { Message, ToolDefinition } from '../llm/types.js';
+import type { LLMClient, StreamCallbacks } from '../llm/client.js';
+import type { ToolRegistry } from '../tools/registry.js';
+import type { MemoStore } from './memo-store.js';
+import { confirmExecution } from '../tools/permission.js';
+import { Conversation } from './conversation.js';
+import { autoMemoForTool } from './auto-memo.js';
+import { ReadTracker } from './read-tracker.js';
+
+export interface AgentCallbacks extends StreamCallbacks {
+  onToolExecuting?: (toolName: string, params: Record<string, unknown>) => void;
+  onToolResult?: (toolName: string, result: string, truncated: boolean) => void;
+  onDenied?: (toolName: string, feedback?: string) => void;
+}
+
+/**
+ * 单 Agent 循环
+ *
+ * 消息流程：
+ * 用户输入 → 构建消息 → LLM (带tools) → 处理响应
+ *   ├─ 含工具调用 → 执行工具 → 结果加入历史 → 回到 LLM
+ *   └─ 纯文本响应 → 返回
+ */
+export class Agent {
+  private conversation: Conversation;
+  private client: LLMClient;
+  private registry: ToolRegistry;
+  private config: ZenCodeConfig;
+  private fixedTools?: ToolDefinition[];
+  private memoStore?: MemoStore;
+  private readTracker = new ReadTracker();
+
+  constructor(
+    client: LLMClient,
+    registry: ToolRegistry,
+    config: ZenCodeConfig,
+    systemPrompt: string,
+    tools?: ToolDefinition[],
+    memoStore?: MemoStore,
+  ) {
+    this.client = client;
+    this.registry = registry;
+    this.config = config;
+    this.conversation = new Conversation();
+    this.conversation.setSystemPrompt(systemPrompt);
+    this.fixedTools = tools;
+    this.memoStore = memoStore;
+  }
+
+  /**
+   * 执行一轮完整的 agent 循环
+   */
+  async run(userMessage: string, callbacks: AgentCallbacks = {}): Promise<string> {
+    this.conversation.addUserMessage(userMessage);
+
+    let lastContent = '';
+
+    while (true) {
+      // 每轮动态获取工具列表，确保 /parallel /todo 等切换生效
+      const tools = this.fixedTools || this.registry.toToolDefinitions();
+
+      // 调用 LLM
+      const assistantMsg = await this.client.chatStream(
+        this.conversation.getMessages(),
+        tools.length > 0 ? tools : undefined,
+        callbacks,
+      );
+
+      this.conversation.addAssistantMessage(assistantMsg);
+
+      // 如果没有工具调用，结束循环
+      if (!assistantMsg.tool_calls || assistantMsg.tool_calls.length === 0) {
+        lastContent = assistantMsg.content || '';
+        break;
+      }
+
+      // 执行所有工具调用
+      for (const toolCall of assistantMsg.tool_calls) {
+        const toolName = toolCall.function.name;
+        let params: Record<string, unknown>;
+        try {
+          params = JSON.parse(toolCall.function.arguments);
+        } catch {
+          this.conversation.addToolResult(toolCall.id, '参数解析失败：无效的 JSON');
+          continue;
+        }
+
+        try {
+          // 先读后改：edit-file 必须先 read-file
+          if (toolName === 'edit-file') {
+            const editPath = params['path'] as string;
+            if (!this.readTracker.hasRead(editPath)) {
+              this.conversation.addToolResult(toolCall.id,
+                `⚠ 禁止编辑未读取的文件。请先 read-file "${editPath}" 了解当前内容，再 edit-file。`);
+              continue;
+            }
+          }
+
+          // write-file 覆盖检查：文件已存在时需要 overwrite: true
+          if (toolName === 'write-file') {
+            const warn = this.readTracker.checkWriteOverwrite(
+              params['path'] as string,
+              params['overwrite'] as boolean | undefined,
+            );
+            if (warn) {
+              this.conversation.addToolResult(toolCall.id, warn);
+              continue;
+            }
+          }
+
+          // 权限检查
+          const permLevel = this.registry.getPermissionLevel(toolName);
+          if (permLevel === 'deny') {
+            callbacks.onDenied?.(toolName);
+            this.conversation.addToolResult(toolCall.id, `工具 "${toolName}" 已被禁止执行`);
+            continue;
+          }
+
+          // 自动执行的工具直接显示并执行
+          if (permLevel === 'auto') {
+            callbacks.onToolExecuting?.(toolName, params);
+          }
+
+          if (permLevel === 'confirm') {
+            const confirmResult = await confirmExecution(toolName, params);
+            if (!confirmResult.approved) {
+              callbacks.onDenied?.(toolName, confirmResult.feedback);
+              const denyMsg = confirmResult.feedback
+                ? `用户拒绝了此操作，用户反馈: ${confirmResult.feedback}`
+                : '用户拒绝了此操作';
+              this.conversation.addToolResult(toolCall.id, denyMsg);
+              continue;
+            }
+          }
+
+          // 执行工具
+          const result = await this.registry.execute(toolName, params, this.config.max_tool_output);
+          callbacks.onToolResult?.(toolName, result.content, result.truncated ?? false);
+          autoMemoForTool(this.memoStore, toolName, params, result.content);
+
+          // 跟踪已读/已写文件
+          if (toolName === 'read-file') {
+            this.readTracker.markRead(params['path'] as string);
+          } else if (toolName === 'write-file') {
+            this.readTracker.markWritten(params['path'] as string);
+          }
+
+          this.conversation.addToolResult(toolCall.id, result.content);
+        } catch (err) {
+          const msg = err instanceof Error ? err.message : String(err);
+          this.conversation.addToolResult(toolCall.id, `工具执行异常：${msg}`);
+        }
+      }
+
+      // 记录最后的文本内容
+      if (assistantMsg.content) {
+        lastContent = assistantMsg.content;
+      }
+    }
+
+    return lastContent;
+  }
+
+  /**
+   * 获取对话历史
+   */
+  getConversation(): Conversation {
+    return this.conversation;
+  }
+}
