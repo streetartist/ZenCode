@@ -7,11 +7,6 @@ export const DEFAULT_CONFIG: ZenCodeConfig = {
   temperature: 0.7,
   max_tokens: 8192,
 
-  agent_mode: 'dual',
-  collaboration: 'delegated',
-
-  dual_agent: {},
-
   features: {
     git: 'auto',
     mcp: 'off',
@@ -21,7 +16,7 @@ export const DEFAULT_CONFIG: ZenCodeConfig = {
   },
 
   permissions: {
-    auto_approve: ['read-file', 'glob', 'grep', 'spawn-agents', 'todo', 'memo'],
+    auto_approve: ['read-file', 'glob', 'grep', 'spawn-agents', 'todo', 'dispatch'],
     require_approval: ['write-file', 'edit-file', 'bash', 'git'],
   },
 

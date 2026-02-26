@@ -9,22 +9,22 @@ interface TodoPanelProps {
 function getStatusIcon(status: string): string {
   switch (status) {
     case 'completed':
-      return '●';
+      return '✅';
     case 'in-progress':
-      return '◐';
+      return '⏳';
     default:
-      return '○';
+      return '⚪';
   }
 }
 
 function getStatusColor(status: string): string {
   switch (status) {
     case 'completed':
-      return 'green';
+      return '#b8bb26';
     case 'in-progress':
-      return 'yellow';
+      return '#fabd2f';
     default:
-      return 'gray';
+      return '#928374';
   }
 }
 
@@ -36,16 +36,16 @@ export function TodoPanel({ plan }: TodoPanelProps) {
     <Box
       flexDirection="column"
       borderStyle="round"
-      borderColor="cyan"
+      borderColor="#83a598"
       paddingX={1}
-      marginBottom={0}
+      marginY={1}
     >
-      <Box justifyContent="space-between">
-        <Text bold color="cyan">
-          Plan
+      <Box justifyContent="space-between" marginBottom={1}>
+        <Text bold color="#83a598">
+          📋 PROJECT PLAN
         </Text>
-        <Text dimColor>
-          {completed}/{total}
+        <Text color="#ebdbb2">
+          {completed}/{total} tasks
         </Text>
       </Box>
       {plan.items.map((item) => (
@@ -54,8 +54,9 @@ export function TodoPanel({ plan }: TodoPanelProps) {
             {getStatusIcon(item.status)}
           </Text>
           <Text
-            color={item.status === 'completed' ? 'green' : undefined}
+            color={item.status === 'completed' ? '#b8bb26' : item.status === 'in-progress' ? '#fabd2f' : '#ebdbb2'}
             dimColor={item.status === 'pending'}
+            strikethrough={item.status === 'completed'}
           >
             {item.title}
           </Text>

@@ -32,6 +32,19 @@ export class Conversation {
   }
 
   /**
+   * 清除历史消息中的 reasoning_content（新一轮对话开始时调用）
+   * deepseek-reasoner 要求同一轮 tool call 循环内保留 reasoning_content，
+   * 但新一轮用户问题开始时应清除以节省带宽，API 也会忽略旧的 reasoning_content
+   */
+  clearReasoningContent(): void {
+    for (const msg of this.messages) {
+      if (msg.reasoning_content !== undefined) {
+        msg.reasoning_content = undefined;
+      }
+    }
+  }
+
+  /**
    * 获取完整的消息列表（包含系统提示词）
    */
   getMessages(): Message[] {

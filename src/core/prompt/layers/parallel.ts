@@ -19,5 +19,5 @@ export function buildParallelPrompt(): string {
   正确：spawn-agents 同时读 auth controller、auth service、auth middleware、auth types
   错误：先 read-file controller，再 read-file service，再 read-file middleware...
 
-每个子 Agent 有独立对话，默认可用 read-file、glob、grep、memo。`;
+每个子 Agent 有独立对话，默认可用 read-file、glob、grep。`;
 }

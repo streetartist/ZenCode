@@ -125,17 +125,14 @@ export function ConfirmPrompt({ confirm, onRespond }: ConfirmPromptProps) {
   useInput((input, key) => {
     if (feedbackMode) return;
 
-    // Left / right to navigate
     if (key.leftArrow) {
       setSelected((prev) => (prev - 1 + OPTIONS.length) % OPTIONS.length);
     } else if (key.rightArrow) {
       setSelected((prev) => (prev + 1) % OPTIONS.length);
     }
-    // Enter to confirm selection
     else if (key.return) {
       onRespond(OPTIONS[selected]!.key);
     }
-    // Shortcut keys
     else if (input === 'y' || input === 'Y') {
       onRespond('allow');
     } else if (input === 'n' || input === 'N') {
@@ -143,11 +140,9 @@ export function ConfirmPrompt({ confirm, onRespond }: ConfirmPromptProps) {
     } else if (input === 'a' || input === 'A') {
       onRespond('always');
     }
-    // Tab to enter feedback mode
     else if (key.tab) {
       setFeedbackMode(true);
     }
-    // Escape to deny
     else if (key.escape) {
       onRespond('deny');
     }
@@ -155,76 +150,79 @@ export function ConfirmPrompt({ confirm, onRespond }: ConfirmPromptProps) {
 
   const { lines, label } = getToolDetails(confirm.toolName, confirm.params);
 
-  // Feedback input mode
   if (feedbackMode) {
     return (
-      <Box flexDirection="column" paddingX={1}>
+      <Box flexDirection="column" paddingX={0} marginY={1}>
+        <Box backgroundColor="#fe8019" paddingX={1}>
+          <Text color="#282828" bold> FEEDBACK </Text>
+        </Box>
         <Box
           flexDirection="column"
           borderStyle="round"
-          borderColor="yellow"
+          borderColor="#fe8019"
           paddingX={1}
         >
-          <Text bold color="yellow">{label}</Text>
+          <Text bold color="#fabd2f">{label}</Text>
           {lines.map((line, i) => (
-            <Text key={i} dimColor>{line}</Text>
+            <Text key={i} color="#a89984">{line}</Text>
           ))}
-        </Box>
-        <Box paddingX={1} gap={1}>
-          <Text color="cyan">反馈: </Text>
-          <FeedbackInput
-            onSubmit={(text) => {
-              const trimmed = text.trim();
-              if (trimmed) {
-                onRespond({ feedback: trimmed });
-              } else {
-                setFeedbackMode(false);
-              }
-            }}
-          />
+          <Box marginTop={1} gap={1}>
+            <Text color="#83a598" bold>Reason: </Text>
+            <FeedbackInput
+              onSubmit={(text) => {
+                const trimmed = text.trim();
+                if (trimmed) {
+                  onRespond({ feedback: trimmed });
+                } else {
+                  setFeedbackMode(false);
+                }
+              }}
+            />
+          </Box>
         </Box>
         <Box paddingX={1}>
-          <Text dimColor>Enter 发送  Esc 返回选择</Text>
+          <Text dimColor>Enter to send · Esc to cancel</Text>
         </Box>
       </Box>
     );
   }
 
   return (
-    <Box flexDirection="column" paddingX={1}>
-      {/* Tool detail box */}
+    <Box flexDirection="column" paddingX={0} marginY={1}>
+      <Box backgroundColor="#fe8019" paddingX={1}>
+        <Text color="#282828" bold> CONFIRMATION REQUIRED </Text>
+      </Box>
       <Box
         flexDirection="column"
         borderStyle="round"
-        borderColor="yellow"
+        borderColor="#fe8019"
         paddingX={1}
       >
-        <Text bold color="yellow">{label}</Text>
+        <Text bold color="#fabd2f">{label}</Text>
         {lines.map((line, i) => (
-          <Text key={i} dimColor>{line}</Text>
+          <Text key={i} color="#a89984">{line}</Text>
         ))}
+
+        <Box marginTop={1} gap={2} justifyContent="center">
+          {OPTIONS.map((opt, i) => {
+            const isSelected = i === selected;
+            const optColor = opt.key === 'deny' ? '#fb4934' : opt.key === 'allow' ? '#b8bb26' : '#8ec07c';
+            return (
+              <Box key={opt.key}>
+                {isSelected ? (
+                  <Text bold backgroundColor={optColor} color="#282828"> {opt.label} </Text>
+                ) : (
+                  <Text color={optColor}> {opt.label} </Text>
+                )}
+              </Box>
+            );
+          })}
+        </Box>
       </Box>
 
-      {/* Selection bar */}
-      <Box marginTop={0} paddingX={1} gap={2}>
-        {OPTIONS.map((opt, i) => {
-          const isSelected = i === selected;
-          return (
-            <Box key={opt.key}>
-              {isSelected ? (
-                <Text bold color="cyan" inverse> {opt.label} </Text>
-              ) : (
-                <Text dimColor> {opt.label} </Text>
-              )}
-            </Box>
-          );
-        })}
-      </Box>
-
-      {/* Hint */}
       <Box paddingX={1}>
         <Text dimColor>
-          ← → 选择  Enter 确认  y 允许  n 拒绝  a 始终  Tab 反馈
+          ← → select · Enter confirm · y/n shortcuts · Tab feedback
         </Text>
       </Box>
     </Box>

@@ -3,7 +3,6 @@ import type { LLMClient } from '../llm/client.js';
 import type { ToolRegistry } from './registry.js';
 import type { ZenCodeConfig } from '../config/types.js';
 import type { SubAgentTracker } from '../core/sub-agent-tracker.js';
-import type { MemoStore } from '../core/memo-store.js';
 import { SubAgent } from '../core/sub-agent.js';
 
 interface TaskInput {
@@ -11,7 +10,7 @@ interface TaskInput {
   tools?: string[];
 }
 
-const DEFAULT_TOOLS = ['read-file', 'glob', 'grep', 'memo'];
+const DEFAULT_TOOLS = ['read-file', 'glob', 'grep'];
 const MAX_CONCURRENT = 10;
 const MAX_TURNS_LIMIT = 15;
 
@@ -23,7 +22,6 @@ export function createSpawnAgentsTool(
   registry: ToolRegistry,
   config: ZenCodeConfig,
   tracker?: SubAgentTracker,
-  memoStore?: MemoStore,
 ): Tool {
   return {
     name: 'spawn-agents',
@@ -98,7 +96,7 @@ export function createSpawnAgentsTool(
           tools = DEFAULT_TOOLS.filter((t) => autoTools.includes(t));
         }
 
-        return new SubAgent(client, registry, config, task.description, tools, maxTurns, undefined, memoStore);
+        return new SubAgent(client, registry, config, task.description, tools, maxTurns);
       });
 
       // 包装每个 agent 的 run，追踪完成/失败

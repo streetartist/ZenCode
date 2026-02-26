@@ -16,6 +16,7 @@ export interface ToolCall {
 export interface Message {
   role: MessageRole;
   content: string | null;
+  reasoning_content?: string | null; // deepseek-reasoner 思维链内容
   tool_calls?: ToolCall[];
   tool_call_id?: string; // 用于 tool 角色的消息
   name?: string;
@@ -45,6 +46,7 @@ export interface ChatCompletionRequest {
 export interface StreamDelta {
   role?: MessageRole;
   content?: string | null;
+  reasoning_content?: string | null; // deepseek-reasoner 思维链流式内容
   tool_calls?: Array<{
     index: number;
     id?: string;

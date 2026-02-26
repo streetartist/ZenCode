@@ -2,10 +2,8 @@ import type { ZenCodeConfig } from '../config/types.js';
 import type { Message, ToolDefinition } from '../llm/types.js';
 import type { LLMClient, StreamCallbacks } from '../llm/client.js';
 import type { ToolRegistry } from '../tools/registry.js';
-import type { MemoStore } from './memo-store.js';
 import { confirmExecution } from '../tools/permission.js';
 import { Conversation } from './conversation.js';
-import { autoMemoForTool } from './auto-memo.js';
 import { ReadTracker } from './read-tracker.js';
 
 export interface AgentCallbacks extends StreamCallbacks {
@@ -28,7 +26,6 @@ export class Agent {
   private registry: ToolRegistry;
   private config: ZenCodeConfig;
   private fixedTools?: ToolDefinition[];
-  private memoStore?: MemoStore;
   private readTracker = new ReadTracker();
   private interrupted = false;
 
@@ -38,7 +35,6 @@ export class Agent {
     config: ZenCodeConfig,
     systemPrompt: string,
     tools?: ToolDefinition[],
-    memoStore?: MemoStore,
   ) {
     this.client = client;
     this.registry = registry;
@@ -46,7 +42,6 @@ export class Agent {
     this.conversation = new Conversation();
     this.conversation.setSystemPrompt(systemPrompt);
     this.fixedTools = tools;
-    this.memoStore = memoStore;
   }
 
   /**
@@ -54,6 +49,8 @@ export class Agent {
    */
   async run(userMessage: string, callbacks: AgentCallbacks = {}): Promise<string> {
     this.interrupted = false;
+    // 新一轮对话：清除历史中的 reasoning_content（deepseek-reasoner 兼容）
+    this.conversation.clearReasoningContent();
     this.conversation.addUserMessage(userMessage);
 
     let lastContent = '';
@@ -141,7 +138,6 @@ export class Agent {
           // 执行工具
           const result = await this.registry.execute(toolName, params, this.config.max_tool_output);
           callbacks.onToolResult?.(toolName, result.content, result.truncated ?? false);
-          autoMemoForTool(this.memoStore, toolName, params, result.content);
 
           // 跟踪已读/已写文件
           if (toolName === 'read-file') {

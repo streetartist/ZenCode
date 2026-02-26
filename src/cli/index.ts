@@ -5,14 +5,14 @@ import { createLLMClient } from '../llm/client.js';
 import { ToolRegistry } from '../tools/registry.js';
 import { registerCoreTools } from '../tools/register.js';
 import { Agent, type AgentCallbacks } from '../core/agent.js';
-import { Orchestrator, type OrchestratorCallbacks } from '../core/dual-agent/orchestrator.js';
 import { buildPrompt } from '../core/prompt/builder.js';
 import { startRepl } from './repl.js';
 import { TodoStore } from '../core/todo-store.js';
-import { MemoStore } from '../core/memo-store.js';
+import { SubAgentConfigRegistry } from '../core/sub-agents/registry.js';
+import { loadAllAgentConfigs } from '../core/sub-agents/loader.js';
 import { createSpawnAgentsTool } from '../tools/spawn-agents.js';
 import { createTodoTool } from '../tools/todo.js';
-import { createMemoTool } from '../tools/memo.js';
+import { createDispatchTool } from '../tools/dispatch.js';
 import { createThinkFilter } from './tui/bridge.js';
 import { printStream, printToolCall, printToolResult, printError, printInfo } from './ui.js';
 
@@ -22,7 +22,13 @@ export { registerCoreTools };
  * 单次执行模式（非交互式）
  */
 async function runOnce(prompt: string, config: ReturnType<typeof loadConfig>): Promise<void> {
-  const { systemPrompt } = await buildPrompt(config);
+  // Load sub-agent configs (before buildPrompt so agents layer can be included)
+  const agentRegistry = new SubAgentConfigRegistry();
+  for (const agentConfig of loadAllAgentConfigs()) {
+    agentRegistry.register(agentConfig);
+  }
+
+  const { systemPrompt } = await buildPrompt(config, agentRegistry.list());
   const registry = new ToolRegistry();
   registerCoreTools(registry);
   registry.setPermissions(config.permissions);
@@ -35,20 +41,20 @@ async function runOnce(prompt: string, config: ReturnType<typeof loadConfig>): P
     maxTokens: config.max_tokens,
   });
 
-  // Register new tools based on feature flags
+  // Register tools based on feature flags
   const todoStore = new TodoStore();
-  const memoStore = new MemoStore();
   if (config.features.parallel_agents === 'on') {
-    registry.register(createSpawnAgentsTool(client, registry, config, undefined, memoStore));
+    registry.register(createSpawnAgentsTool(client, registry, config));
   }
   if (config.features.todo === 'on') {
     registry.register(createTodoTool(todoStore));
   }
-  registry.register(createMemoTool(memoStore));
+
+  registry.register(createDispatchTool(client, registry, config, agentRegistry));
 
   let isStreaming = false;
   const thinkFilter = createThinkFilter();
-  const callbacks: AgentCallbacks & OrchestratorCallbacks = {
+  const callbacks: AgentCallbacks = {
     onContent: (text) => {
       const filtered = thinkFilter(text);
       if (!filtered) return;
@@ -67,29 +73,14 @@ async function runOnce(prompt: string, config: ReturnType<typeof loadConfig>): P
     onToolResult: (name, result, truncated) => {
       printToolResult(name, result, truncated);
     },
-    onCoderStart: () => {
-      if (isStreaming) {
-        process.stdout.write('\n');
-        isStreaming = false;
-      }
-      printInfo('编码 Agent 开始工作...');
-    },
-    onCoderEnd: () => {
-      printInfo('编码 Agent 完成');
-    },
     onError: (err) => {
       printError(err.message);
     },
   };
 
   try {
-    if (config.agent_mode === 'single') {
-      const agent = new Agent(client, registry, config, systemPrompt, undefined, memoStore);
-      await agent.run(prompt, callbacks);
-    } else {
-      const orchestrator = new Orchestrator(registry, config, systemPrompt, memoStore);
-      await orchestrator.run(prompt, callbacks);
-    }
+    const agent = new Agent(client, registry, config, systemPrompt);
+    await agent.run(prompt, callbacks);
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
     printError(msg);
@@ -114,9 +105,6 @@ export function createCli(): Command {
     .option('-m, --model <model>', '指定模型名称')
     .option('-k, --api-key <key>', 'API 密钥')
     .option('-u, --base-url <url>', 'API 基础 URL')
-    .option('--single', '使用单 Agent 模式')
-    .option('--dual', '使用双 Agent 模式')
-    .option('--mode <mode>', '协作模式 (delegated/autonomous/controlled)')
     .option('--simple', '使用简单 REPL 模式（非全屏 TUI）')
     .argument('[prompt...]', '直接执行的提示词（非交互式）')
     .action(async (promptParts: string[], opts: CliOptions & { simple?: boolean }) => {

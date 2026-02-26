@@ -1,12 +1,12 @@
 import React, { useReducer, useCallback, useEffect, useRef, useState } from 'react';
-import { Box, Text, useInput } from 'ink';
-import type { ZenCodeConfig, CollaborationMode } from '../../config/types.js';
+import { Box, Text, useInput, useStdout } from 'ink';
+import type { ZenCodeConfig } from '../../config/types.js';
 import type { Agent } from '../../core/agent.js';
-import type { Orchestrator, OrchestratorCallbacks } from '../../core/dual-agent/orchestrator.js';
 import type { ToolRegistry } from '../../tools/registry.js';
 import type { TodoStore } from '../../core/todo-store.js';
-import type { MemoStore } from '../../core/memo-store.js';
 import type { SubAgentTracker } from '../../core/sub-agent-tracker.js';
+import type { SubAgentConfigRegistry } from '../../core/sub-agents/registry.js';
+import type { SkillRegistry } from '../../core/skills/registry.js';
 import { isAbortError, type LLMClient } from '../../llm/client.js';
 import { setStructuredConfirmHandler } from '../../tools/permission.js';
 import type { ConfirmExecutionResult } from '../../tools/permission.js';
@@ -19,38 +19,44 @@ import { InputArea } from './components/InputArea.js';
 import { StatusBar } from './components/StatusBar.js';
 import { ConfirmPrompt } from './components/ConfirmPrompt.js';
 import { TodoPanel } from './components/TodoPanel.js';
+import { Header } from './components/Header.js';
 
 interface AppProps {
   config: ZenCodeConfig;
   client: LLMClient;
   agent: Agent;
-  orchestrator: Orchestrator;
   registry: ToolRegistry;
   todoStore: TodoStore;
-  memoStore: MemoStore;
   subAgentTracker: SubAgentTracker;
+  agentRegistry: SubAgentConfigRegistry;
+  skillRegistry: SkillRegistry;
 }
 
-export function App({ config, client, agent, orchestrator, registry, todoStore, memoStore, subAgentTracker }: AppProps) {
+export function App({ config, client, agent, registry, todoStore, subAgentTracker, agentRegistry, skillRegistry }: AppProps) {
+  const { stdout } = useStdout();
+  const [, setWidth] = useState(stdout.columns);
+
+  useEffect(() => {
+    const onResize = () => {
+      setWidth(stdout.columns);
+    };
+    stdout.on('resize', onResize);
+    return () => { stdout.off('resize', onResize); };
+  }, [stdout]);
+
   const [state, dispatch] = useReducer(
     tuiReducer,
-    createInitialState(
-      config.model,
-      config.agent_mode,
-      config.collaboration,
-    ),
+    createInitialState(config.model),
   );
 
-  // Reset counter: forces full re-mount when /clear is used (like kilocode)
+  // Reset counter: forces full re-mount when /clear is used
   const [resetKey, setResetKey] = useState(0);
   const currentCallbacksRef = useRef<(ReturnType<typeof createBridgeCallbacks> & { _stopBatcher?: () => void }) | null>(null);
 
   const agentRef = useRef(agent);
-  const orchestratorRef = useRef(orchestrator);
   const todoStoreRef = useRef(todoStore);
   const subAgentTrackerRef = useRef(subAgentTracker);
   agentRef.current = agent;
-  orchestratorRef.current = orchestrator;
   todoStoreRef.current = todoStore;
   subAgentTrackerRef.current = subAgentTracker;
 
@@ -68,13 +74,11 @@ export function App({ config, client, agent, orchestrator, registry, todoStore, 
 
     const unsub = subAgentTrackerRef.current.subscribe((progress) => {
       latest = progress;
-      // null = finished, dispatch immediately
       if (progress === null) {
         if (timer) { clearTimeout(timer); timer = null; }
         dispatch({ type: 'SET_SUB_AGENT_PROGRESS', progress: null });
         return;
       }
-      // Throttle: at most once per 2000ms（减少动态区域重绘）
       if (!timer) {
         dispatch({ type: 'SET_SUB_AGENT_PROGRESS', progress });
         timer = setTimeout(() => {
@@ -122,16 +126,8 @@ export function App({ config, client, agent, orchestrator, registry, todoStore, 
     return () => { setStructuredConfirmHandler(null); };
   }, [registry]);
 
-  // --- Handle user message submission ---
-  const handleSubmit = useCallback(async (text: string) => {
-    if (text.startsWith('/')) {
-      handleSlashCommand(text, {
-        config, agent: agentRef.current, orchestrator: orchestratorRef.current, registry, dispatch, setResetKey,
-        client, todoStore, memoStore, subAgentTracker,
-      });
-      return;
-    }
-
+  // --- Run agent with a message ---
+  const runAgent = useCallback(async (text: string) => {
     dispatch({ type: 'ADD_USER_MESSAGE', text });
     dispatch({ type: 'START_ASSISTANT' });
     dispatch({ type: 'SET_RUNNING', running: true });
@@ -140,11 +136,7 @@ export function App({ config, client, agent, orchestrator, registry, todoStore, 
     currentCallbacksRef.current = callbacks as ReturnType<typeof createBridgeCallbacks> & { _stopBatcher?: () => void };
 
     try {
-      if (config.agent_mode === 'single') {
-        await agentRef.current.run(text, callbacks);
-      } else {
-        await orchestratorRef.current.run(text, callbacks as unknown as OrchestratorCallbacks);
-      }
+      await agentRef.current.run(text, callbacks);
     } catch (err) {
       if (!isAbortError(err)) {
         const msg = err instanceof Error ? err.message : String(err);
@@ -157,7 +149,34 @@ export function App({ config, client, agent, orchestrator, registry, todoStore, 
     (callbacks as any)._stopBatcher?.();
     dispatch({ type: 'FINISH_STREAMING' });
     dispatch({ type: 'SET_RUNNING', running: false });
-  }, [config]);
+  }, []);
+
+  // --- Handle user message submission ---
+  const handleSubmit = useCallback(async (text: string) => {
+    if (text.startsWith('/')) {
+      // Check if it's a user-defined skill first
+      const parts = text.slice(1).split(/\s+/);
+      const skillName = parts[0]!;
+      const skillArgs = parts.slice(1).join(' ');
+      const skill = skillRegistry.get(skillName);
+
+      if (skill) {
+        // Execute skill: expand prompt and send to agent
+        const expandedPrompt = skillRegistry.expandPrompt(skill, skillArgs);
+        await runAgent(expandedPrompt);
+        return;
+      }
+
+      // Otherwise handle built-in slash commands
+      handleSlashCommand(text, {
+        config, agent: agentRef.current, registry, dispatch, setResetKey,
+        client, todoStore, subAgentTracker, agentRegistry, skillRegistry,
+      });
+      return;
+    }
+
+    await runAgent(text);
+  }, [config, runAgent]);
 
   // --- Handle confirm response ---
   const handleConfirmResponse = useCallback((result: ConfirmResult) => {
@@ -165,8 +184,6 @@ export function App({ config, client, agent, orchestrator, registry, todoStore, 
       confirmPending.resolve(result);
       dispatch({ type: 'CONFIRM_RESPONDED', id: '' });
       const approved = result === 'allow' || result === 'always';
-      // Only update confirming → running for approved tools.
-      // Denied tools will be handled by bridge's onDenied callback (with feedback).
       if (approved) {
         for (const msg of state.messages) {
           for (const block of msg.blocks) {
@@ -184,7 +201,6 @@ export function App({ config, client, agent, orchestrator, registry, todoStore, 
     if (key.escape) {
       if (state.isRunning) {
         agentRef.current.interrupt();
-        orchestratorRef.current.interrupt();
         currentCallbacksRef.current?._stopBatcher?.();
         dispatch({ type: 'SET_RUNNING', running: false });
         dispatch({ type: 'FINISH_STREAMING' });
@@ -195,7 +211,6 @@ export function App({ config, client, agent, orchestrator, registry, todoStore, 
     if (input === 'c' && key.ctrl) {
       if (state.isRunning) {
         agentRef.current.interrupt();
-        orchestratorRef.current.interrupt();
         currentCallbacksRef.current?._stopBatcher?.();
         dispatch({ type: 'SET_RUNNING', running: false });
         dispatch({ type: 'FINISH_STREAMING' });
@@ -208,55 +223,41 @@ export function App({ config, client, agent, orchestrator, registry, todoStore, 
   });
 
   return (
-    <Box key={resetKey} flexDirection="column">
-      {/* Messages area */}
-      <Box flexDirection="column" overflow="hidden">
+    <Box key={resetKey} flexDirection="column" paddingX={0} width="100%">
+      <Box paddingX={1} flexDirection="column">
+        <Header modelName={state.modelName} />
         <ChatArea messages={state.messages} />
       </Box>
 
-      {/* Error */}
       {state.error && (
-        <Box
-          borderStyle="round"
-          borderColor="red"
-          paddingX={1}
-          marginBottom={1}
-        >
-          <Text color="red" bold>✖ Error: </Text>
-          <Text color="red">{state.error}</Text>
+        <Box borderStyle="round" borderColor="#fb4934" paddingX={1} marginBottom={1}>
+          <Text color="#fb4934" bold>ERROR: </Text>
+          <Text color="#fb4934">{state.error}</Text>
         </Box>
       )}
 
-      {/* Confirm prompt */}
       {confirmPending && (
-        <ConfirmPrompt
-          confirm={confirmPending}
-          onRespond={handleConfirmResponse}
+        <ConfirmPrompt confirm={confirmPending} onRespond={handleConfirmResponse} />
+      )}
+
+      {state.todoPlan && <TodoPanel plan={state.todoPlan} />}
+
+      <Box marginTop={1}>
+        <InputArea
+          onSubmit={handleSubmit}
+          isRunning={state.isRunning || !!confirmPending}
+          onExitRequest={() => process.exit(0)}
         />
-      )}
+      </Box>
 
-      {/* Todo panel */}
-      {state.todoPlan && (
-        <TodoPanel plan={state.todoPlan} />
-      )}
-
-      {/* Input */}
-      <InputArea
-        onSubmit={handleSubmit}
-        isRunning={state.isRunning || !!confirmPending}
-        onExitRequest={() => process.exit(0)}
-      />
-
-      {/* Status bar */}
-      <StatusBar
-        agentMode={state.agentMode}
-        collaboration={state.collaboration}
-        coderWorking={state.coderWorking}
-        isRunning={state.isRunning}
-        modelName={state.modelName}
-        todoPlan={state.todoPlan}
-        subAgentProgress={state.subAgentProgress}
-      />
+      <Box marginTop={0}>
+        <StatusBar
+          isRunning={state.isRunning}
+          modelName={state.modelName}
+          todoPlan={state.todoPlan}
+          subAgentProgress={state.subAgentProgress}
+        />
+      </Box>
     </Box>
   );
 }
@@ -265,18 +266,18 @@ export function App({ config, client, agent, orchestrator, registry, todoStore, 
 interface SlashCommandContext {
   config: ZenCodeConfig;
   agent: Agent;
-  orchestrator: Orchestrator | undefined;
   registry: ToolRegistry;
   dispatch: React.Dispatch<TuiAction>;
   setResetKey: React.Dispatch<React.SetStateAction<number>>;
   client: LLMClient;
   todoStore: TodoStore;
-  memoStore: MemoStore;
   subAgentTracker: SubAgentTracker;
+  agentRegistry: SubAgentConfigRegistry;
+  skillRegistry: SkillRegistry;
 }
 
 function handleSlashCommand(input: string, ctx: SlashCommandContext) {
-  const { config, agent, orchestrator, registry, dispatch, setResetKey, client, todoStore, memoStore, subAgentTracker } = ctx;
+  const { config, agent, registry, dispatch, setResetKey, client, todoStore, subAgentTracker, agentRegistry, skillRegistry } = ctx;
   const parts = input.trim().split(/\s+/);
   const command = parts[0];
 
@@ -284,55 +285,56 @@ function handleSlashCommand(input: string, ctx: SlashCommandContext) {
     case '/help':
       dispatch({ type: 'ADD_USER_MESSAGE', text: input });
       dispatch({ type: 'START_ASSISTANT' });
-      dispatch({
-        type: 'APPEND_CONTENT',
-        text: `可用命令:
+      {
+        let helpText = `可用命令:
   /help                显示此帮助信息
-  /mode [模式]         切换协作模式 (delegated/autonomous/controlled)
-  /single              切换到单 Agent 模式
-  /dual                切换到双 Agent 模式
+  /skills              列出所有可用技能
+  /agents              列出所有可用子 Agent
   /parallel            切换并行子 Agent 功能 on/off
   /todo                切换 todo 计划功能 on/off
   /clear               清空对话历史
   /info                显示当前配置
   Ctrl+C               取消当前请求 / 退出
-  Ctrl+D               退出`,
-      });
+  Ctrl+D               退出`;
+        const skills = skillRegistry.list();
+        if (skills.length > 0) {
+          helpText += `\n\n可用技能:\n${skills.map(s => `  /${s.name}  ${s.description}`).join('\n')}`;
+        }
+        dispatch({ type: 'APPEND_CONTENT', text: helpText });
+      }
       dispatch({ type: 'FINISH_STREAMING' });
       break;
 
-    case '/mode': {
-      const mode = parts[1];
-      if (!mode) {
-        dispatch({ type: 'ADD_USER_MESSAGE', text: input });
-        dispatch({ type: 'START_ASSISTANT' });
-        dispatch({
-          type: 'APPEND_CONTENT',
-          text: `当前协作模式: ${config.collaboration}\n可选: delegated, autonomous, controlled`,
-        });
-        dispatch({ type: 'FINISH_STREAMING' });
-      } else if (['delegated', 'autonomous', 'controlled'].includes(mode)) {
-        config.collaboration = mode as CollaborationMode;
-        orchestrator?.setMode(mode as CollaborationMode);
-        dispatch({ type: 'SET_MODE', agentMode: config.agent_mode, collaboration: mode });
+    case '/skills': {
+      const skills = skillRegistry.list();
+      dispatch({ type: 'ADD_USER_MESSAGE', text: input });
+      dispatch({ type: 'START_ASSISTANT' });
+      if (skills.length === 0) {
+        dispatch({ type: 'APPEND_CONTENT', text: '暂无可用技能。在 ~/.zencode/skills/ 或 .zencode/skills/ 放置 YAML 文件添加技能。' });
+      } else {
+        const lines = skills.map(s => `  /${s.name}: ${s.description}`);
+        dispatch({ type: 'APPEND_CONTENT', text: `可用技能 (${skills.length}):\n${lines.join('\n')}` });
       }
+      dispatch({ type: 'FINISH_STREAMING' });
       break;
     }
 
-    case '/single':
-      config.agent_mode = 'single';
-      dispatch({ type: 'SET_MODE', agentMode: 'single', collaboration: config.collaboration });
+    case '/agents': {
+      const agents = agentRegistry.list();
+      dispatch({ type: 'ADD_USER_MESSAGE', text: input });
+      dispatch({ type: 'START_ASSISTANT' });
+      if (agents.length === 0) {
+        dispatch({ type: 'APPEND_CONTENT', text: '暂无可用子 Agent。' });
+      } else {
+        const lines = agents.map(a => `  ${a.name}: ${a.description} [tools: ${a.tools.join(', ')}]`);
+        dispatch({ type: 'APPEND_CONTENT', text: `可用子 Agent (${agents.length}):\n${lines.join('\n')}` });
+      }
+      dispatch({ type: 'FINISH_STREAMING' });
       break;
-
-    case '/dual':
-      config.agent_mode = 'dual';
-      dispatch({ type: 'SET_MODE', agentMode: 'dual', collaboration: config.collaboration });
-      break;
+    }
 
     case '/clear':
       agent.getConversation().clear();
-      orchestrator?.getConversation().clear();
-      memoStore.clear();
       dispatch({ type: 'CLEAR_MESSAGES' });
       setResetKey(prev => prev + 1);
       break;
@@ -344,7 +346,7 @@ function handleSlashCommand(input: string, ctx: SlashCommandContext) {
       if (next === 'off') {
         registry.unregister('spawn-agents');
       } else if (!registry.has('spawn-agents')) {
-        registry.register(createSpawnAgentsTool(client, registry, config, subAgentTracker, memoStore));
+        registry.register(createSpawnAgentsTool(client, registry, config, subAgentTracker));
       }
       dispatch({ type: 'ADD_USER_MESSAGE', text: input });
       dispatch({ type: 'START_ASSISTANT' });
@@ -374,7 +376,7 @@ function handleSlashCommand(input: string, ctx: SlashCommandContext) {
       dispatch({ type: 'START_ASSISTANT' });
       dispatch({
         type: 'APPEND_CONTENT',
-        text: `模型: ${config.model}\nAgent 模式: ${config.agent_mode}\n协作模式: ${config.collaboration}\n基础 URL: ${config.base_url}`,
+        text: `模型: ${config.model}\n基础 URL: ${config.base_url}\n子 Agent: ${agentRegistry.listNames().join(', ') || '无'}\n技能: ${skillRegistry.listNames().map(n => '/' + n).join(', ') || '无'}`,
       });
       dispatch({ type: 'FINISH_STREAMING' });
       break;

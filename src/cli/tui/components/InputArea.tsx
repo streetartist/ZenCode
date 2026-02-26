@@ -5,18 +5,40 @@ interface InputAreaProps {
   onSubmit: (text: string) => void;
   isRunning: boolean;
   onExitRequest: () => void;
+  onScroll?: (direction: 'up' | 'down') => void;
 }
 
 /**
  * Custom text input that only accepts printable characters.
- * Immune to mouse/terminal escape sequence leaks.
  */
-function CleanTextInput({ onSubmit, placeholder, onExitRequest }: { onSubmit: (text: string) => void; placeholder?: string; onExitRequest: () => void }) {
+function CleanTextInput({ 
+  onSubmit, 
+  placeholder, 
+  onExitRequest, 
+  onScroll 
+}: { 
+  onSubmit: (text: string) => void; 
+  placeholder?: string; 
+  onExitRequest: () => void;
+  onScroll?: (direction: 'up' | 'down') => void;
+}) {
   const [value, setValue] = useState('');
   const [cursor, setCursor] = useState(0);
   const lastCtrlCAtRef = useRef(0);
 
   useInput((input, key) => {
+    // Scroll handling
+    if (onScroll) {
+      if (key.pageUp || (key.upArrow && key.shift)) {
+        onScroll('up');
+        return;
+      }
+      if (key.pageDown || (key.downArrow && key.shift)) {
+        onScroll('down');
+        return;
+      }
+    }
+
     if (input === 'c' && key.ctrl) {
       if (value.length > 0) {
         setValue('');
@@ -61,9 +83,12 @@ function CleanTextInput({ onSubmit, placeholder, onExitRequest }: { onSubmit: (t
     if (key.ctrl || key.meta || key.escape) return;
     if (!input || input.length === 0) return;
     if (input.includes('\x1b') || input.includes('\x00')) return;
+    
+    // Filter out some common terminal escape sequences
     if (/^(?:\[<\d+;\d+;\d+[Mm])+$/.test(input)) return;
     if (/^\[<[0-9;Mm]*$/.test(input)) return;
     if (input === '[5~' || input === '[6~') return;
+
     for (let i = 0; i < input.length; i++) {
       const code = input.charCodeAt(i);
       if (code < 0x20 && code !== 0x09) return;
@@ -96,19 +121,28 @@ function CleanTextInput({ onSubmit, placeholder, onExitRequest }: { onSubmit: (t
   );
 }
 
-export function InputArea({ onSubmit, isRunning, onExitRequest }: InputAreaProps) {
+export function InputArea({ onSubmit, isRunning, onExitRequest, onScroll }: InputAreaProps) {
   return (
-    <Box paddingX={1}>
-      <Text color={isRunning ? 'gray' : 'green'} bold>&gt; </Text>
-      {isRunning ? (
-        <Text dimColor>等待回复中...</Text>
-      ) : (
-        <CleanTextInput
-          onSubmit={onSubmit}
-          placeholder="输入消息或 /命令..."
-          onExitRequest={onExitRequest}
-        />
-      )}
+    <Box paddingX={0}>
+      <Box backgroundColor={isRunning ? "#504945" : "#b8bb26"} paddingX={1} marginRight={1}>
+        <Text color="#282828" bold>{isRunning ? " WAIT " : " INPUT "}</Text>
+      </Box>
+      <Box flexGrow={1}>
+        {isRunning ? (
+          <Box flexGrow={1} onWheel={(event) => {
+            // Ink handles wheel? Not really, but just in case for future.
+          }}>
+            <Text color="#a89984" italic>Thinking...</Text>
+          </Box>
+        ) : (
+          <CleanTextInput
+            onSubmit={onSubmit}
+            placeholder="Type a message or /command..."
+            onExitRequest={onExitRequest}
+            onScroll={onScroll}
+          />
+        )}
+      </Box>
     </Box>
   );
 }

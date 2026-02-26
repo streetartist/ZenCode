@@ -1,9 +1,7 @@
 import type { ZenCodeConfig } from '../config/types.js';
 import type { LLMClient } from '../llm/client.js';
 import type { ToolRegistry } from '../tools/registry.js';
-import type { MemoStore } from './memo-store.js';
 import { Conversation } from './conversation.js';
-import { autoMemoForTool } from './auto-memo.js';
 import { ReadTracker } from './read-tracker.js';
 
 const DEFAULT_TIMEOUT_MS = 120_000; // 2 minutes
@@ -21,17 +19,15 @@ export class SubAgent {
   private allowedTools: string[];
   private maxTurns: number;
   private timeoutMs: number;
-  private memoStore?: MemoStore;
 
   constructor(
     client: LLMClient,
     registry: ToolRegistry,
     config: ZenCodeConfig,
     task: string,
-    allowedTools: string[] = ['read-file', 'glob', 'grep', 'memo'],
+    allowedTools: string[] = ['read-file', 'glob', 'grep'],
     maxTurns: number = 10,
     timeoutMs: number = DEFAULT_TIMEOUT_MS,
-    memoStore?: MemoStore,
   ) {
     this.client = client;
     this.registry = registry;
@@ -41,7 +37,6 @@ export class SubAgent {
     this.allowedTools = allowedTools.filter((t) => t !== 'spawn-agents' && t !== 'todo');
     this.maxTurns = Math.min(maxTurns, 15);
     this.timeoutMs = timeoutMs;
-    this.memoStore = memoStore;
   }
 
   async run(): Promise<string> {
@@ -64,13 +59,7 @@ export class SubAgent {
     const conversation = new Conversation();
     const readTracker = new ReadTracker();
 
-    let systemPrompt = `你是 ZenCode 子 Agent。你的任务：${this.task}\n完成后直接返回结果，不要多余解释。`;
-    if (this.memoStore) {
-      const index = this.memoStore.buildIndex();
-      if (index) {
-        systemPrompt += `\n\n[共享备忘录 - 可用 memo read 读取详情]\n${index}`;
-      }
-    }
+    const systemPrompt = `你是 ZenCode 子 Agent。你的任务：${this.task}\n完成后直接返回结果，不要多余解释。`;
 
     conversation.setSystemPrompt(systemPrompt);
     conversation.addUserMessage(this.task);
@@ -138,7 +127,6 @@ export class SubAgent {
             params,
             this.config.max_tool_output,
           );
-          autoMemoForTool(this.memoStore, toolName, params, result.content);
 
           // 跟踪已读/已写文件
           if (toolName === 'read-file') {

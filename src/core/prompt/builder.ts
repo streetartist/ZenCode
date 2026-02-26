@@ -1,9 +1,11 @@
 import * as fs from 'node:fs';
 import type { ZenCodeConfig } from '../../config/types.js';
+import type { SubAgentConfig } from '../sub-agents/types.js';
 import { buildCorePrompt } from './layers/core.js';
 import { buildPlanningPrompt } from './layers/planning.js';
 import { buildParallelPrompt } from './layers/parallel.js';
 import { buildGitPrompt } from './layers/git.js';
+import { buildAgentsPrompt } from './layers/agents.js';
 import { buildProjectPrompt, loadUserPrompts } from './layers/project.js';
 
 export interface PromptBuildResult {
@@ -26,7 +28,7 @@ function isGitRepo(): boolean {
 /**
  * 分层提示词构建器 - 按需组装各层
  */
-export async function buildPrompt(config: ZenCodeConfig): Promise<PromptBuildResult> {
+export async function buildPrompt(config: ZenCodeConfig, agents?: SubAgentConfig[]): Promise<PromptBuildResult> {
   const layers: string[] = [];
 
   // Layer 0: 核心层（始终加载）
@@ -50,13 +52,21 @@ export async function buildPrompt(config: ZenCodeConfig): Promise<PromptBuildRes
     layers.push(buildParallelPrompt());
   }
 
-  // Layer 4: 项目层（ZENCODE.md）
+  // Layer 4: 子 Agent 层（有可用 agent 时加载）
+  if (agents && agents.length > 0) {
+    const agentsPrompt = buildAgentsPrompt(agents);
+    if (agentsPrompt) {
+      layers.push(agentsPrompt);
+    }
+  }
+
+  // Layer 5: 项目层（ZENCODE.md）
   const projectPrompt = await buildProjectPrompt();
   if (projectPrompt) {
     layers.push(projectPrompt);
   }
 
-  // Layer 4: 用户自定义提示词
+  // Layer 6: 用户自定义提示词
   if (config.prompts.length > 0) {
     const userPrompts = await loadUserPrompts(config.prompts);
     layers.push(...userPrompts);
@@ -68,9 +78,3 @@ export async function buildPrompt(config: ZenCodeConfig): Promise<PromptBuildRes
   return { systemPrompt, layers };
 }
 
-/**
- * 构建 Agent B（编码者）的极简提示词
- */
-export function buildCoderPrompt(): string {
-  return '你是一个编程助手。';
-}

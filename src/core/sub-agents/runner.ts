@@ -1,78 +1,103 @@
 import type { ZenCodeConfig } from '../../config/types.js';
-import type { Message, ToolDefinition } from '../../llm/types.js';
 import type { LLMClient } from '../../llm/client.js';
 import type { ToolRegistry } from '../../tools/registry.js';
 import type { AgentCallbacks } from '../agent.js';
-import type { MemoStore } from '../memo-store.js';
+import type { SubAgentConfig } from './types.js';
 import { Conversation } from '../conversation.js';
 import { confirmExecution } from '../../tools/permission.js';
-import { autoMemoForTool } from '../auto-memo.js';
 import { ReadTracker } from '../read-tracker.js';
 
+const DEFAULT_MAX_TURNS = 15;
+
 /**
- * Agent B - 编码者
+ * SubAgentRunner - 执行可配置子 Agent
  *
- * 短生命周期：每次任务创建新会话，避免累积上下文
- * 根据协作模式，可能有工具也可能没有
+ * 基于 SubAgentConfig 运行子 Agent。
+ * 使用流式 chatStream()，TUI 可实时显示输出。
  */
-export class Coder {
+export class SubAgentRunner {
   private client: LLMClient;
   private registry: ToolRegistry;
   private config: ZenCodeConfig;
-  private systemPrompt: string;
-  private tools: ToolDefinition[];
-  private memoStore?: MemoStore;
+  private agentConfig: SubAgentConfig;
 
   constructor(
     client: LLMClient,
     registry: ToolRegistry,
     config: ZenCodeConfig,
-    systemPrompt: string,
-    tools: ToolDefinition[],
-    memoStore?: MemoStore,
+    agentConfig: SubAgentConfig,
   ) {
     this.client = client;
     this.registry = registry;
     this.config = config;
-    this.systemPrompt = systemPrompt;
-    this.tools = tools;
-    this.memoStore = memoStore;
+    this.agentConfig = agentConfig;
   }
 
   /**
-   * 执行编码任务（短生命周期，每次新建会话）
-   *
-   * @param taskMessage 调度者发来的任务描述（作为 user message）
-   * @param callbacks 回调
-   * @returns 编码者的最终响应
+   * 执行子 Agent 任务
    */
-  async execute(taskMessage: string, callbacks: AgentCallbacks = {}): Promise<string> {
+  async execute(task: string, context?: string, callbacks: AgentCallbacks = {}): Promise<string> {
+    const timeoutMs = (this.agentConfig.timeout ?? 120) * 1000;
+    const maxTurns = this.agentConfig.max_turns ?? DEFAULT_MAX_TURNS;
+
+    return Promise.race([
+      this.run(task, context, maxTurns, callbacks),
+      this.timeout(timeoutMs),
+    ]);
+  }
+
+  private timeout(ms: number): Promise<never> {
+    return new Promise((_, reject) => {
+      setTimeout(
+        () => reject(new Error(`子 Agent "${this.agentConfig.name}" 超时（${ms / 1000}s）`)),
+        ms,
+      );
+    });
+  }
+
+  private async run(task: string, context: string | undefined, maxTurns: number, callbacks: AgentCallbacks): Promise<string> {
     const conversation = new Conversation();
-    conversation.setSystemPrompt(this.systemPrompt);
+    const readTracker = new ReadTracker();
+
+    conversation.setSystemPrompt(this.agentConfig.prompt);
+
+    // 组装任务消息
+    let taskMessage = task;
+    if (context) {
+      taskMessage += `\n\n[上下文]\n${context}`;
+    }
     conversation.addUserMessage(taskMessage);
 
-    const readTracker = new ReadTracker();
+    // 构建工具列表：取子 Agent 声明的工具与注册表的交集
+    const tools = this.registry.toToolDefinitions(this.agentConfig.tools);
     let lastContent = '';
 
-    while (true) {
-
+    for (let turn = 0; turn < maxTurns; turn++) {
       const assistantMsg = await this.client.chatStream(
         conversation.getMessages(),
-        this.tools.length > 0 ? this.tools : undefined,
+        tools.length > 0 ? tools : undefined,
         callbacks,
       );
 
       conversation.addAssistantMessage(assistantMsg);
 
-      // 无工具调用 → 结束
       if (!assistantMsg.tool_calls || assistantMsg.tool_calls.length === 0) {
         lastContent = assistantMsg.content || '';
         break;
       }
 
-      // 有工具 → 执行工具循环（autonomous 模式）
       for (const toolCall of assistantMsg.tool_calls) {
         const toolName = toolCall.function.name;
+
+        // 检查工具是否在子 Agent 允许列表中
+        if (!this.agentConfig.tools.includes(toolName)) {
+          conversation.addToolResult(
+            toolCall.id,
+            `子 Agent "${this.agentConfig.name}" 不允许使用工具 "${toolName}"`,
+          );
+          continue;
+        }
+
         let params: Record<string, unknown>;
         try {
           params = JSON.parse(toolCall.function.arguments);
@@ -82,7 +107,7 @@ export class Coder {
         }
 
         try {
-          // 先读后改：edit-file 必须先 read-file
+          // 先读后改检查
           if (toolName === 'edit-file') {
             const editPath = params['path'] as string;
             if (!readTracker.hasRead(editPath)) {
@@ -92,7 +117,7 @@ export class Coder {
             }
           }
 
-          // write-file 覆盖检查：文件已存在时需要 overwrite: true
+          // write-file 覆盖检查
           if (toolName === 'write-file') {
             const warn = readTracker.checkWriteOverwrite(
               params['path'] as string,
@@ -104,6 +129,7 @@ export class Coder {
             }
           }
 
+          // 权限检查
           const permLevel = this.registry.getPermissionLevel(toolName);
           if (permLevel === 'deny') {
             callbacks.onDenied?.(toolName);
@@ -127,9 +153,9 @@ export class Coder {
             }
           }
 
+          // 执行工具
           const result = await this.registry.execute(toolName, params, this.config.max_tool_output);
           callbacks.onToolResult?.(toolName, result.content, result.truncated ?? false);
-          autoMemoForTool(this.memoStore, toolName, params, result.content);
 
           // 跟踪已读/已写文件
           if (toolName === 'read-file') {

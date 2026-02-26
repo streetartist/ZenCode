@@ -4,6 +4,21 @@ import type { Tool, ToolResult } from './types.js';
 const DEFAULT_TIMEOUT = 120_000; // 2 minutes
 const IS_WIN = process.platform === 'win32';
 
+/**
+ * Windows cmd.exe 默认用系统代码页（如 GBK/CP936）输出，
+ * 需要先以 buffer 读取再用正确编码解码，否则中文乱码。
+ */
+function decodeBuffer(buf: Buffer): string {
+  if (!IS_WIN) return buf.toString('utf-8');
+  try {
+    // Node.js 不原生支持 GBK，优先尝试 TextDecoder
+    const decoder = new TextDecoder('gbk');
+    return decoder.decode(buf);
+  } catch {
+    return buf.toString('utf-8');
+  }
+}
+
 export const bashTool: Tool = {
   name: 'bash',
   description: IS_WIN
@@ -37,8 +52,12 @@ export const bashTool: Tool = {
           timeout,
           maxBuffer: 1024 * 1024 * 10, // 10MB
           shell: process.platform === 'win32' ? 'cmd.exe' : '/bin/bash',
+          encoding: 'buffer',
         },
-        (error, stdout, stderr) => {
+        (error, stdoutBuf, stderrBuf) => {
+          const stdout = stdoutBuf ? decodeBuffer(stdoutBuf) : '';
+          const stderr = stderrBuf ? decodeBuffer(stderrBuf) : '';
+
           let output = '';
           if (stdout) output += stdout;
           if (stderr) output += (output ? '\n' : '') + `[stderr]\n${stderr}`;

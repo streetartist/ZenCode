@@ -64,12 +64,8 @@ export function printToolCall(toolName: string, params: Record<string, unknown>)
     const action = String(params['action']);
     const id = params['id'] ? ` [${params['id']}]` : '';
     detail = ` ${chalk.dim(`${action}${id}`)}`;
-  } else if (toolName === 'memo' && params['action']) {
-    const action = String(params['action']);
-    const key = params['key'] ? ` [${params['key']}]` : '';
-    detail = ` ${chalk.dim(`${action}${key}`)}`;
   }
-  const icon = toolName === 'spawn-agents' ? '⚡' : toolName === 'todo' ? '📋' : toolName === 'memo' ? '📝' : '⚙';
+  const icon = toolName === 'spawn-agents' ? '⚡' : toolName === 'todo' ? '📋' : '⚙';
   console.log(chalk.yellow(`  ${icon} ${toolName}`) + detail);
 }
 
@@ -135,17 +131,11 @@ export function printDiff(oldContent: string, newContent: string, filePath: stri
 /**
  * 打印模式信息
  */
-export function printModeInfo(mode: string, isDouble: boolean): void {
-  const modeType = isDouble ? '双Agent' : '单Agent';
-  console.log(chalk.cyan(`模式: ${modeType}${isDouble ? ` (${mode})` : ''}`));
-}
-
 /**
  * 打印欢迎信息
  */
-export function printWelcome(modelName: string, mode: string): void {
+export function printWelcome(modelName: string): void {
   console.log(chalk.bold.cyan('\n  ZenCode') + chalk.dim(' - 极简 AI 编程助手\n'));
   console.log(chalk.dim(`  模型: ${modelName}`));
-  console.log(chalk.dim(`  模式: ${mode}`));
   console.log(chalk.dim(`  输入 /help 查看命令，Ctrl+C 退出\n`));
 }

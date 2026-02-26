@@ -69,6 +69,9 @@ export class LLMClient {
       });
 
       let contentParts: string[] = [];
+      let reasoningParts: string[] = [];
+      let reasoningStarted = false;
+      let reasoningEnded = false;
       const toolCallMap = new Map<number, { id: string; name: string; args: string }>();
 
       for await (const chunk of stream) {
@@ -77,8 +80,24 @@ export class LLMClient {
 
         const delta: StreamDelta = choice.delta as StreamDelta;
 
+        // 处理 reasoning_content（deepseek-reasoner 思维链）
+        if (delta.reasoning_content) {
+          reasoningParts.push(delta.reasoning_content);
+          // 首个 reasoning chunk 前注入 <think> 标签，让 thinkFilter 渲染
+          if (!reasoningStarted) {
+            reasoningStarted = true;
+            callbacks.onContent?.('<think>');
+          }
+          callbacks.onContent?.(delta.reasoning_content);
+        }
+
         // 处理文本内容
         if (delta.content) {
+          // reasoning → content 过渡时注入 </think>
+          if (reasoningStarted && !reasoningEnded) {
+            reasoningEnded = true;
+            callbacks.onContent?.('</think>');
+          }
           contentParts.push(delta.content);
           callbacks.onContent?.(delta.content);
         }
@@ -111,6 +130,12 @@ export class LLMClient {
         }
       }
 
+      // reasoning 结束但没有 content 跟随时（如只返回 tool_calls），关闭 think 标签
+      if (reasoningStarted && !reasoningEnded) {
+        reasoningEnded = true;
+        callbacks.onContent?.('</think>');
+      }
+
       // 组装完整的 tool_calls
       const toolCalls: ToolCall[] = [];
       for (const [, tc] of [...toolCallMap.entries()].sort(([a], [b]) => a - b)) {
@@ -127,10 +152,15 @@ export class LLMClient {
       }
 
       const fullContent = contentParts.join('');
+      const fullReasoning = reasoningParts.join('');
       const assistantMessage: Message = {
         role: 'assistant',
         content: fullContent || null,
       };
+
+      if (fullReasoning) {
+        assistantMessage.reasoning_content = fullReasoning;
+      }
 
       if (toolCalls.length > 0) {
         assistantMessage.tool_calls = toolCalls;
@@ -182,6 +212,12 @@ export class LLMClient {
       role: 'assistant',
       content: msg.content,
     };
+
+    // 捕获 reasoning_content（deepseek-reasoner）
+    const reasoning = (msg as unknown as Record<string, unknown>).reasoning_content;
+    if (reasoning && typeof reasoning === 'string') {
+      result.reasoning_content = reasoning;
+    }
 
     if (msg.tool_calls && msg.tool_calls.length > 0) {
       result.tool_calls = msg.tool_calls.map((tc) => ({

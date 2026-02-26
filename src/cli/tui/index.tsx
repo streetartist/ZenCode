@@ -5,14 +5,16 @@ import { createLLMClient } from '../../llm/client.js';
 import { ToolRegistry } from '../../tools/registry.js';
 import { registerCoreTools } from '../../tools/register.js';
 import { Agent } from '../../core/agent.js';
-import { Orchestrator } from '../../core/dual-agent/orchestrator.js';
 import { buildPrompt } from '../../core/prompt/builder.js';
 import { TodoStore } from '../../core/todo-store.js';
-import { MemoStore } from '../../core/memo-store.js';
 import { SubAgentTracker } from '../../core/sub-agent-tracker.js';
+import { SubAgentConfigRegistry } from '../../core/sub-agents/registry.js';
+import { loadAllAgentConfigs } from '../../core/sub-agents/loader.js';
+import { SkillRegistry } from '../../core/skills/registry.js';
+import { loadAllSkills } from '../../core/skills/loader.js';
 import { createSpawnAgentsTool } from '../../tools/spawn-agents.js';
 import { createTodoTool } from '../../tools/todo.js';
-import { createMemoTool } from '../../tools/memo.js';
+import { createDispatchTool } from '../../tools/dispatch.js';
 import { App } from './App.js';
 
 interface TuiOptions {
@@ -25,8 +27,14 @@ interface TuiOptions {
 export async function startTui(options: TuiOptions): Promise<void> {
   const { config } = options;
 
+  // Load sub-agent configs (before buildPrompt so agents layer can be included)
+  const agentRegistry = new SubAgentConfigRegistry();
+  for (const agentConfig of loadAllAgentConfigs()) {
+    agentRegistry.register(agentConfig);
+  }
+
   // Build system prompt
-  const { systemPrompt } = await buildPrompt(config);
+  const { systemPrompt } = await buildPrompt(config, agentRegistry.list());
 
   // Register tools
   const registry = new ToolRegistry();
@@ -44,21 +52,26 @@ export async function startTui(options: TuiOptions): Promise<void> {
 
   // Create stores
   const todoStore = new TodoStore();
-  const memoStore = new MemoStore();
   const subAgentTracker = new SubAgentTracker();
 
-  // Register new tools based on feature flags
+  // Load skills
+  const skillRegistry = new SkillRegistry();
+  for (const skill of loadAllSkills()) {
+    skillRegistry.register(skill);
+  }
+
+  // Register tools based on feature flags
   if (config.features.parallel_agents === 'on') {
-    registry.register(createSpawnAgentsTool(client, registry, config, subAgentTracker, memoStore));
+    registry.register(createSpawnAgentsTool(client, registry, config, subAgentTracker));
   }
   if (config.features.todo === 'on') {
     registry.register(createTodoTool(todoStore));
   }
-  registry.register(createMemoTool(memoStore));
+  // Register dispatch tool (sub-agent system)
+  registry.register(createDispatchTool(client, registry, config, agentRegistry));
 
-  // Create both agents so /single and /dual switching works
-  const agent = new Agent(client, registry, config, systemPrompt, undefined, memoStore);
-  const orchestrator = new Orchestrator(registry, config, systemPrompt, memoStore);
+  // Create agent
+  const agent = new Agent(client, registry, config, systemPrompt);
 
   // Render the full-screen TUI
   const { waitUntilExit } = render(
@@ -66,11 +79,11 @@ export async function startTui(options: TuiOptions): Promise<void> {
       config={config}
       client={client}
       agent={agent}
-      orchestrator={orchestrator}
       registry={registry}
       todoStore={todoStore}
-      memoStore={memoStore}
       subAgentTracker={subAgentTracker}
+      agentRegistry={agentRegistry}
+      skillRegistry={skillRegistry}
     />,
     {
       patchConsole: true,

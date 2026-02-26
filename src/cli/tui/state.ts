@@ -22,9 +22,10 @@ export interface ConfirmPending {
   resolve: (result: ConfirmResult) => void;
 }
 
-// Content blocks: text and tool calls are interleaved in order
+// Content blocks: text, tool calls and thoughts are interleaved in order
 export type ContentBlock =
   | { type: 'text'; text: string }
+  | { type: 'thought'; text: string }
   | { type: 'tool'; toolCall: ToolCallState };
 
 export interface ChatMessage {
@@ -39,23 +40,17 @@ export interface TuiState {
   messages: ChatMessage[];
   isRunning: boolean;
   error?: string;
-  coderWorking: boolean;
   modelName: string;
-  agentMode: string;
-  collaboration: string;
   todoPlan: TodoPlan | null;
   subAgentProgress: SubAgentProgress | null;
 }
 
-export function createInitialState(modelName: string, agentMode: string, collaboration: string): TuiState {
+export function createInitialState(modelName: string): TuiState {
   return {
     messages: [],
     isRunning: false,
     error: undefined,
-    coderWorking: false,
     modelName,
-    agentMode,
-    collaboration,
     todoPlan: null,
     subAgentProgress: null,
   };
@@ -66,6 +61,7 @@ export type TuiAction =
   | { type: 'ADD_USER_MESSAGE'; text: string }
   | { type: 'START_ASSISTANT' }
   | { type: 'APPEND_CONTENT'; text: string }
+  | { type: 'APPEND_THOUGHT'; text: string }
   | { type: 'TOOL_EXECUTING'; id: string; name: string; params: Record<string, unknown> }
   | { type: 'TOOL_STREAMING'; id: string; name: string; streamingContent: string }
   | { type: 'TOOL_RESULT'; id: string; resultSummary: string; resultContent?: string }
@@ -76,10 +72,7 @@ export type TuiAction =
   | { type: 'SET_RUNNING'; running: boolean }
   | { type: 'SET_ERROR'; error: string }
   | { type: 'CLEAR_ERROR' }
-  | { type: 'CODER_START' }
-  | { type: 'CODER_END' }
   | { type: 'CLEAR_MESSAGES' }
-  | { type: 'SET_MODE'; agentMode: string; collaboration: string }
   | { type: 'SET_TODO_PLAN'; plan: TodoPlan | null }
   | { type: 'SET_SUB_AGENT_PROGRESS'; progress: SubAgentProgress | null };
 
@@ -152,6 +145,24 @@ export function tuiReducer(state: TuiState, action: TuiAction): TuiState {
           } else {
             // Create new text block (after a tool block or empty)
             blocks.push({ type: 'text', text: action.text });
+          }
+          return { ...msg, blocks };
+        }),
+      };
+    }
+
+    case 'APPEND_THOUGHT': {
+      return {
+        ...state,
+        messages: updateLastAssistant(state.messages, (msg) => {
+          const blocks = [...msg.blocks];
+          const last = blocks[blocks.length - 1];
+          if (last && last.type === 'thought') {
+            // Append to existing thought block
+            blocks[blocks.length - 1] = { type: 'thought', text: last.text + action.text };
+          } else {
+            // Create new thought block
+            blocks.push({ type: 'thought', text: action.text });
           }
           return { ...msg, blocks };
         }),
@@ -319,17 +330,8 @@ export function tuiReducer(state: TuiState, action: TuiAction): TuiState {
     case 'CLEAR_ERROR':
       return { ...state, error: undefined };
 
-    case 'CODER_START':
-      return { ...state, coderWorking: true };
-
-    case 'CODER_END':
-      return { ...state, coderWorking: false };
-
     case 'CLEAR_MESSAGES':
       return { ...state, messages: [] };
-
-    case 'SET_MODE':
-      return { ...state, agentMode: action.agentMode, collaboration: action.collaboration };
 
     case 'SET_TODO_PLAN':
       return { ...state, todoPlan: action.plan };

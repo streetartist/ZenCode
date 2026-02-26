@@ -57,12 +57,6 @@ function loadEnvConfig(): Partial<ZenCodeConfig> {
   if (process.env['ZENCODE_BASE_URL']) {
     config.base_url = process.env['ZENCODE_BASE_URL'];
   }
-  if (process.env['ZENCODE_MODE']) {
-    const mode = process.env['ZENCODE_MODE'];
-    if (mode === 'dual' || mode === 'single') {
-      config.agent_mode = mode;
-    }
-  }
 
   return config;
 }
@@ -74,9 +68,6 @@ export interface CliOptions {
   model?: string;
   apiKey?: string;
   baseUrl?: string;
-  single?: boolean;
-  dual?: boolean;
-  mode?: string;
 }
 
 function loadCliConfig(opts: CliOptions): Partial<ZenCodeConfig> {
@@ -85,14 +76,6 @@ function loadCliConfig(opts: CliOptions): Partial<ZenCodeConfig> {
   if (opts.model) config.model = opts.model;
   if (opts.apiKey) config.api_key = opts.apiKey;
   if (opts.baseUrl) config.base_url = opts.baseUrl;
-  if (opts.single) config.agent_mode = 'single';
-  if (opts.dual) config.agent_mode = 'dual';
-  if (opts.mode) {
-    const m = opts.mode;
-    if (m === 'delegated' || m === 'autonomous' || m === 'controlled') {
-      config.collaboration = m;
-    }
-  }
 
   return config;
 }
@@ -114,21 +97,4 @@ export function loadConfig(cliOpts: CliOptions = {}): ZenCodeConfig {
   config = deepMerge(config, loadCliConfig(cliOpts));
 
   return config;
-}
-
-/**
- * 解析模型配置，合并 orchestrator/coder 的配置与全局配置
- */
-export function resolveModelConfig(
-  config: ZenCodeConfig,
-  role: 'orchestrator' | 'coder',
-): Required<Pick<ZenCodeConfig, 'model' | 'api_key' | 'base_url' | 'temperature' | 'max_tokens'>> {
-  const roleConfig = config.dual_agent[role] || {};
-  return {
-    model: roleConfig.model || config.model,
-    api_key: roleConfig.api_key || config.api_key,
-    base_url: roleConfig.base_url || config.base_url,
-    temperature: roleConfig.temperature ?? config.temperature,
-    max_tokens: roleConfig.max_tokens ?? config.max_tokens,
-  };
 }
