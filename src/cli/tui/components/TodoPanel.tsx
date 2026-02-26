@@ -9,11 +9,11 @@ interface TodoPanelProps {
 function getStatusIcon(status: string): string {
   switch (status) {
     case 'completed':
-      return '✅';
+      return '*';
     case 'in-progress':
-      return '⏳';
+      return '>';
     default:
-      return '⚪';
+      return ' ';
   }
 }
 
@@ -42,17 +42,18 @@ export function TodoPanel({ plan }: TodoPanelProps) {
     >
       <Box justifyContent="space-between" marginBottom={1}>
         <Text bold color="#83a598">
-          📋 PROJECT PLAN
+          PROJECT PLAN
         </Text>
         <Text color="#ebdbb2">
           {completed}/{total} tasks
         </Text>
       </Box>
       {plan.items.map((item) => (
-        <Box key={item.id} gap={1}>
+        <Box key={item.id} gap={0}>
           <Text color={getStatusColor(item.status)}>
-            {getStatusIcon(item.status)}
+            [{getStatusIcon(item.status)}]
           </Text>
+          <Text> </Text>
           <Text
             color={item.status === 'completed' ? '#b8bb26' : item.status === 'in-progress' ? '#fabd2f' : '#ebdbb2'}
             dimColor={item.status === 'pending'}

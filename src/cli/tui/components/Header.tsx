@@ -19,7 +19,7 @@ export function Header({ modelName }: HeaderProps) {
       <Box justifyContent="space-between">
         <Box gap={1}>
           <Text bold color="#fe8019">ZEN CODE</Text>
-          <Text color="#a89984" dimColor>v0.2.1</Text>
+          <Text color="#a89984" dimColor>v0.2.3</Text>
         </Box>
         <Text color="#83a598" bold>{modelName}</Text>
       </Box>

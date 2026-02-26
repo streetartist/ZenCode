@@ -65,7 +65,7 @@ export function printToolCall(toolName: string, params: Record<string, unknown>)
     const id = params['id'] ? ` [${params['id']}]` : '';
     detail = ` ${chalk.dim(`${action}${id}`)}`;
   }
-  const icon = toolName === 'spawn-agents' ? '⚡' : toolName === 'todo' ? '📋' : '⚙';
+  const icon = toolName === 'spawn-agents' ? '>>' : toolName === 'todo' ? '#' : '>';
   console.log(chalk.yellow(`  ${icon} ${toolName}`) + detail);
 }
 
