@@ -17,9 +17,21 @@ export function getToolParamSummary(name: string, params: Record<string, unknown
     case 'glob':
     case 'grep':
       return String(params['pattern'] || '');
+    case 'spawn-agents': {
+      const tasks = params['tasks'] as Array<{ description?: string }> | undefined;
+      if (!tasks || tasks.length === 0) return '';
+      return `${tasks.length} tasks: ${tasks.map(t => t.description || '?').join(' | ').slice(0, 100)}`;
+    }
+    case 'dispatch':
+      return `${params['agent'] || '?'}: ${String(params['task'] || '').slice(0, 80)}`;
     default:
       const keys = Object.keys(params);
-      return keys.length > 0 ? String(params[keys[0]] || '').slice(0, 60) : '';
+      if (keys.length === 0) return '';
+      const val = params[keys[0]];
+      if (val === null || val === undefined) return '';
+      if (typeof val === 'string') return val.slice(0, 60);
+      if (typeof val === 'number' || typeof val === 'boolean') return String(val);
+      return JSON.stringify(val).slice(0, 60);
   }
 }
 

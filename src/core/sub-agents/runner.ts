@@ -3,6 +3,7 @@ import type { LLMClient } from '../../llm/client.js';
 import type { ToolRegistry } from '../../tools/registry.js';
 import type { AgentCallbacks } from '../agent.js';
 import type { SubAgentConfig } from './types.js';
+import type { SubAgentTracker } from '../sub-agent-tracker.js';
 import { Conversation } from '../conversation.js';
 import { confirmExecution } from '../../tools/permission.js';
 import { ReadTracker } from '../read-tracker.js';
@@ -20,17 +21,20 @@ export class SubAgentRunner {
   private registry: ToolRegistry;
   private config: ZenCodeConfig;
   private agentConfig: SubAgentConfig;
+  private tracker?: SubAgentTracker;
 
   constructor(
     client: LLMClient,
     registry: ToolRegistry,
     config: ZenCodeConfig,
     agentConfig: SubAgentConfig,
+    tracker?: SubAgentTracker,
   ) {
     this.client = client;
     this.registry = registry;
     this.config = config;
     this.agentConfig = agentConfig;
+    this.tracker = tracker;
   }
 
   /**
@@ -78,6 +82,11 @@ export class SubAgentRunner {
         tools.length > 0 ? tools : undefined,
         callbacks,
       );
+
+      // 报告 token 用量
+      if (assistantMsg.usage && this.tracker) {
+        this.tracker.addTokens(assistantMsg.usage.total_tokens);
+      }
 
       conversation.addAssistantMessage(assistantMsg);
 

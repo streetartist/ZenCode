@@ -10,6 +10,12 @@ interface StatusBarProps {
   subAgentProgress?: SubAgentProgress | null;
 }
 
+function formatTokens(n: number): string {
+  if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(1)}M`;
+  if (n >= 1_000) return `${(n / 1_000).toFixed(1)}K`;
+  return String(n);
+}
+
 export function StatusBar({ isRunning, modelName, todoPlan, subAgentProgress }: StatusBarProps) {
 
   const todoProgress = todoPlan
@@ -21,28 +27,30 @@ export function StatusBar({ isRunning, modelName, todoPlan, subAgentProgress }: 
       <Box backgroundColor="#3c3836" paddingX={1}>
         <Text color="#ebdbb2" bold> ZENCODE </Text>
       </Box>
-      
+
       <Box backgroundColor="#504945" paddingX={1} flexGrow={1}>
         <Text color="#ebdbb2">{modelName}</Text>
-        
+
         {isRunning && !subAgentProgress && (
           <>
             <Text color="#ebdbb2"> │ </Text>
             <Text color="#8ec07c">● thinking...</Text>
           </>
         )}
-        
+
         {subAgentProgress && (
           <>
             <Text color="#ebdbb2"> │ </Text>
-            <Text color="#b8bb26">🤖 Agents: {subAgentProgress.completed + subAgentProgress.failed}/{subAgentProgress.total}</Text>
+            <Text color="#b8bb26">Agents: {subAgentProgress.completed + subAgentProgress.failed}/{subAgentProgress.total}</Text>
+            <Text color="#ebdbb2"> │ </Text>
+            <Text color="#83a598">tokens: {formatTokens(subAgentProgress.tokens)}</Text>
           </>
         )}
 
         {todoProgress && (
           <>
             <Text color="#ebdbb2"> │ </Text>
-            <Text color="#fabd2f">📋 Plan: {todoProgress}</Text>
+            <Text color="#fabd2f">Plan: {todoProgress}</Text>
           </>
         )}
       </Box>

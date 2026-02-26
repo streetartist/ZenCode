@@ -68,7 +68,7 @@ export async function startTui(options: TuiOptions): Promise<void> {
     registry.register(createTodoTool(todoStore));
   }
   // Register dispatch tool (sub-agent system)
-  registry.register(createDispatchTool(client, registry, config, agentRegistry));
+  registry.register(createDispatchTool(client, registry, config, agentRegistry, subAgentTracker));
 
   // Create agent
   const agent = new Agent(client, registry, config, systemPrompt);

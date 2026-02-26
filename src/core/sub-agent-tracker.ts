@@ -9,6 +9,7 @@ export interface SubAgentProgress {
   completed: number;
   failed: number;
   descriptions: string[];
+  tokens: number;
 }
 
 type ProgressListener = (progress: SubAgentProgress | null) => void;
@@ -23,6 +24,7 @@ export class SubAgentTracker {
       completed: 0,
       failed: 0,
       descriptions,
+      tokens: 0,
     };
     this.notify();
   }
@@ -36,6 +38,12 @@ export class SubAgentTracker {
   markFailed(): void {
     if (!this.progress) return;
     this.progress = { ...this.progress, failed: this.progress.failed + 1 };
+    this.notify();
+  }
+
+  addTokens(count: number): void {
+    if (!this.progress) return;
+    this.progress = { ...this.progress, tokens: this.progress.tokens + count };
     this.notify();
   }
 

@@ -96,7 +96,7 @@ export function createSpawnAgentsTool(
           tools = DEFAULT_TOOLS.filter((t) => autoTools.includes(t));
         }
 
-        return new SubAgent(client, registry, config, task.description, tools, maxTurns);
+        return new SubAgent(client, registry, config, task.description, tools, maxTurns, undefined, tracker);
       });
 
       // 包装每个 agent 的 run，追踪完成/失败

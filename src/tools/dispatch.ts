@@ -4,6 +4,7 @@ import type { ToolRegistry } from './registry.js';
 import type { ZenCodeConfig } from '../config/types.js';
 import type { AgentCallbacks } from '../core/agent.js';
 import type { SubAgentConfigRegistry } from '../core/sub-agents/registry.js';
+import type { SubAgentTracker } from '../core/sub-agent-tracker.js';
 import { SubAgentRunner } from '../core/sub-agents/runner.js';
 import { createLLMClient } from '../llm/client.js';
 
@@ -15,6 +16,7 @@ export function createDispatchTool(
   toolRegistry: ToolRegistry,
   config: ZenCodeConfig,
   agentRegistry: SubAgentConfigRegistry,
+  tracker?: SubAgentTracker,
   callbacks?: () => AgentCallbacks,
 ): Tool {
   return {
@@ -63,12 +65,17 @@ export function createDispatchTool(
         });
       }
 
-      const runner = new SubAgentRunner(client, toolRegistry, config, agentConfig);
+      const runner = new SubAgentRunner(client, toolRegistry, config, agentConfig, tracker);
+
+      // 通知 tracker 开始
+      tracker?.start([`${agentName}: ${task.slice(0, 60)}`]);
 
       try {
         const result = await runner.execute(task, context, callbacks?.() ?? {});
+        tracker?.finish();
         return { content: result || '（子 Agent 执行完成，无输出）' };
       } catch (err) {
+        tracker?.finish();
         const msg = err instanceof Error ? err.message : String(err);
         return { content: `子 Agent 执行错误：${msg}` };
       }

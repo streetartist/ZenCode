@@ -1,6 +1,7 @@
 import type { ZenCodeConfig } from '../config/types.js';
 import type { LLMClient } from '../llm/client.js';
 import type { ToolRegistry } from '../tools/registry.js';
+import type { SubAgentTracker } from './sub-agent-tracker.js';
 import { Conversation } from './conversation.js';
 import { ReadTracker } from './read-tracker.js';
 
@@ -19,6 +20,7 @@ export class SubAgent {
   private allowedTools: string[];
   private maxTurns: number;
   private timeoutMs: number;
+  private tracker?: SubAgentTracker;
 
   constructor(
     client: LLMClient,
@@ -28,6 +30,7 @@ export class SubAgent {
     allowedTools: string[] = ['read-file', 'glob', 'grep'],
     maxTurns: number = 10,
     timeoutMs: number = DEFAULT_TIMEOUT_MS,
+    tracker?: SubAgentTracker,
   ) {
     this.client = client;
     this.registry = registry;
@@ -37,6 +40,7 @@ export class SubAgent {
     this.allowedTools = allowedTools.filter((t) => t !== 'spawn-agents' && t !== 'todo');
     this.maxTurns = Math.min(maxTurns, 15);
     this.timeoutMs = timeoutMs;
+    this.tracker = tracker;
   }
 
   async run(): Promise<string> {
@@ -72,6 +76,11 @@ export class SubAgent {
         conversation.getMessages(),
         tools.length > 0 ? tools : undefined,
       );
+
+      // 报告 token 用量
+      if (assistantMsg.usage && this.tracker) {
+        this.tracker.addTokens(assistantMsg.usage.total_tokens);
+      }
 
       conversation.addAssistantMessage(assistantMsg);
 

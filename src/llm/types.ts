@@ -20,6 +20,7 @@ export interface Message {
   tool_calls?: ToolCall[];
   tool_call_id?: string; // 用于 tool 角色的消息
   name?: string;
+  usage?: { prompt_tokens: number; completion_tokens: number; total_tokens: number };
 }
 
 export interface FunctionDefinition {

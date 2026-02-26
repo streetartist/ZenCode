@@ -60,6 +60,9 @@ export class LLMClient {
       params.tool_choice = 'auto';
     }
 
+    // Request usage info in stream
+    params.stream_options = { include_usage: true };
+
     const abortController = new AbortController();
     this.activeAbortController = abortController;
 
@@ -73,8 +76,19 @@ export class LLMClient {
       let reasoningStarted = false;
       let reasoningEnded = false;
       const toolCallMap = new Map<number, { id: string; name: string; args: string }>();
+      let usageInfo: { prompt_tokens: number; completion_tokens: number; total_tokens: number } | null = null;
 
       for await (const chunk of stream) {
+        // 捕获 usage（最后一个 chunk 包含）
+        const chunkUsage = (chunk as any).usage;
+        if (chunkUsage && chunkUsage.total_tokens) {
+          usageInfo = {
+            prompt_tokens: chunkUsage.prompt_tokens ?? 0,
+            completion_tokens: chunkUsage.completion_tokens ?? 0,
+            total_tokens: chunkUsage.total_tokens,
+          };
+        }
+
         const choice = chunk.choices[0];
         if (!choice) continue;
 
@@ -166,6 +180,10 @@ export class LLMClient {
         assistantMessage.tool_calls = toolCalls;
       }
 
+      if (usageInfo) {
+        assistantMessage.usage = usageInfo;
+      }
+
       callbacks.onFinish?.(assistantMessage);
       return assistantMessage;
     } catch (error) {
@@ -228,6 +246,15 @@ export class LLMClient {
           arguments: tc.function.arguments,
         },
       }));
+    }
+
+    // 捕获 token 用量
+    if (response.usage) {
+      result.usage = {
+        prompt_tokens: response.usage.prompt_tokens,
+        completion_tokens: response.usage.completion_tokens,
+        total_tokens: response.usage.total_tokens,
+      };
     }
 
     return result;

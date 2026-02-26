@@ -101,7 +101,7 @@ export function createCli(): Command {
   program
     .name('zencode')
     .description('极简 CLI AI 编程工具')
-    .version('0.2.1')
+    .version('0.2.3')
     .option('-m, --model <model>', '指定模型名称')
     .option('-k, --api-key <key>', 'API 密钥')
     .option('-u, --base-url <url>', 'API 基础 URL')
