@@ -14,6 +14,7 @@ export function buildParallelPrompt(): string {
 - 需要搜索 2+ 个模式 → spawn-agents 并行搜索
 - 需要了解 2+ 个模块 → spawn-agents 并行分析
 - 只有 1 个目标 → 直接用工具，无需 spawn-agents
+- 必须为每个子 Agent 分配明确且无重叠的目标，避免多个 Agent 重复处理同一对象造成浪费
 
 示例 - 用户说"帮我理解认证模块"：
   正确：spawn-agents 同时读 auth controller、auth service、auth middleware、auth types

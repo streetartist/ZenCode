@@ -8,7 +8,8 @@ export function buildGitPrompt(): string {
 
 提交规范：
 - 只在用户明确要求时才创建 commit
-- 用 git diff 查看变更，再写 commit message
+- 提交前必须用 git status 和 git diff --staged 检查即将提交的内容，确保没有混入不相关文件或调试代码
+- 建议遵循 Conventional Commits 规范（如 feat: ..., fix: ...）
 - commit message 描述"为什么"而非"改了什么"
 
 安全规则：

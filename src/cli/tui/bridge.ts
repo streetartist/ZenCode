@@ -4,8 +4,7 @@
 import type { Dispatch } from 'react';
 import type { AgentCallbacks } from '../../core/agent.js';
 import type { TuiAction } from './state.js';
-
-const BATCH_INTERVAL_MS = 64; // ~15fps, balances smoothness vs flicker for fullscreen redraw
+import { progressStore } from './stores/progressStore.js';
 
 const ANSI_GRAY = '\x1b[90m';
 const ANSI_RESET = '\x1b[0m';
@@ -111,24 +110,24 @@ export function createThinkFilter() {
 }
 
 /**
- * Creates a token batcher that accumulates streaming content
- * and flushes to dispatch at a fixed interval.
+ * Creates a unified action batcher that collects dispatches and flushes them
+ * at a fixed interval to minimize terminal flickering and React re-renders.
  */
-function createTokenBatcher(dispatch: Dispatch<TuiAction>, type: 'APPEND_CONTENT' | 'APPEND_THOUGHT') {
-  let buffer = '';
+function createActionBatcher(dispatch: Dispatch<TuiAction>) {
+  let pendingActions: Map<string, TuiAction> = new Map();
   let timer: ReturnType<typeof setInterval> | null = null;
 
   function flush() {
-    if (buffer.length > 0) {
-      const text = buffer;
-      buffer = '';
-      dispatch({ type, text } as any);
+    if (pendingActions.size > 0) {
+      const actions = Array.from(pendingActions.values());
+      pendingActions.clear();
+      dispatch({ type: 'BATCH', actions });
     }
   }
 
   function start() {
     if (!timer) {
-      timer = setInterval(flush, BATCH_INTERVAL_MS);
+      timer = setInterval(flush, 200); // Optimized for smoothness
     }
   }
 
@@ -140,19 +139,18 @@ function createTokenBatcher(dispatch: Dispatch<TuiAction>, type: 'APPEND_CONTENT
     }
   }
 
-  function append(text: string) {
-    buffer += text;
+  function queue(key: string, action: TuiAction) {
+    if (action.type === 'APPEND_CONTENT' || action.type === 'APPEND_THOUGHT') {
+      const existing = pendingActions.get(key) as any;
+      if (existing) {
+        action = { ...action, text: existing.text + (action as any).text } as TuiAction;
+      }
+    }
+    pendingActions.set(key, action);
     start();
   }
 
-  function pause() {
-    if (timer) {
-      clearInterval(timer);
-      timer = null;
-    }
-  }
-
-  return { append, stop, flush, pause };
+  return { queue, stop, flush };
 }
 
 // Track tool call IDs for mapping tool results back
@@ -160,8 +158,8 @@ let toolCallCounter = 0;
 let activeToolIds: Map<string, string> = new Map();
 // Track streaming tool index → id
 let streamingToolIds: Map<number, string> = new Map();
-// Track last streaming args per tool id (for computing code line count on result)
-let lastStreamingArgs: Map<string, string> = new Map();
+// Track last streaming value per tool id to avoid redundant updates
+let lastStreamingValues: Map<string, string> = new Map();
 
 /**
  * 从部分 JSON 参数中提取代码内容（write-file 的 content 或 edit-file 的 new_string）
@@ -197,109 +195,98 @@ export function registerConfirmToolId(toolName: string, id: string): void {
  * Creates AgentCallbacks that dispatch to TUI state.
  */
 export function createBridgeCallbacks(dispatch: Dispatch<TuiAction>): AgentCallbacks & { _stopBatcher: () => void } {
-  const contentBatcher = createTokenBatcher(dispatch, 'APPEND_CONTENT');
-  const thoughtBatcher = createTokenBatcher(dispatch, 'APPEND_THOUGHT');
+  const batcher = createActionBatcher(dispatch);
   
   let inThink = false;
   let tagBuffer = '';
 
   activeToolIds = new Map();
   streamingToolIds = new Map();
-  lastStreamingArgs = new Map();
+  lastStreamingValues = new Map();
   toolCallCounter = 0;
-
-  let streamingThrottleTimer: ReturnType<typeof setTimeout> | null = null;
-  let pendingStreamingUpdate: (() => void) | null = null;
-
-  function flushStreamingUpdate() {
-    if (pendingStreamingUpdate) {
-      pendingStreamingUpdate();
-      pendingStreamingUpdate = null;
-    }
-    if (streamingThrottleTimer) {
-      clearTimeout(streamingThrottleTimer);
-      streamingThrottleTimer = null;
-    }
-  }
 
   return {
     onContent: (text: string) => {
+      let contentAcc = '';
+      let thoughtAcc = '';
+
       for (let i = 0; i < text.length; i++) {
         const ch = text[i]!;
 
         if (tagBuffer.length > 0 || ch === '<') {
           tagBuffer += ch;
           if (tagBuffer === '<think>') {
-            contentBatcher.flush();
+            if (contentAcc) batcher.queue('content', { type: 'APPEND_CONTENT', text: contentAcc });
+            contentAcc = '';
+            batcher.flush();
             inThink = true;
             tagBuffer = '';
             continue;
           } else if (tagBuffer === '</think>') {
-            thoughtBatcher.flush();
+            if (thoughtAcc) batcher.queue('thought', { type: 'APPEND_THOUGHT', text: thoughtAcc });
+            thoughtAcc = '';
+            batcher.flush();
             inThink = false;
             tagBuffer = '';
             continue;
           } else if (!'<think>'.startsWith(tagBuffer) && !'</think>'.startsWith(tagBuffer)) {
-            if (inThink) {
-              thoughtBatcher.append(tagBuffer);
-            } else {
-              contentBatcher.append(tagBuffer);
-            }
+            if (inThink) thoughtAcc += tagBuffer;
+            else contentAcc += tagBuffer;
             tagBuffer = '';
           }
           continue;
         }
 
-        if (inThink) {
-          thoughtBatcher.append(ch);
-        } else {
-          contentBatcher.append(ch);
-        }
+        if (inThink) thoughtAcc += ch;
+        else contentAcc += ch;
       }
+
+      if (thoughtAcc) batcher.queue('thought', { type: 'APPEND_THOUGHT', text: thoughtAcc });
+      if (contentAcc) batcher.queue('content', { type: 'APPEND_CONTENT', text: contentAcc });
     },
 
     onToolCallStreaming: (index: number, name: string, accumulatedArgs: string) => {
       if (!streamingToolIds.has(index)) {
-        contentBatcher.flush();
-        thoughtBatcher.flush();
+        batcher.flush();
         const id = `tool-${++toolCallCounter}`;
         streamingToolIds.set(index, id);
         activeToolIds.set(name, id);
-        dispatch({ type: 'TOOL_STREAMING', id, name, streamingContent: '0' });
+        lastStreamingValues.set(id, '0');
+        // Still queue the action to ensure the block is created in the history, but it won't update repeatedly
+        batcher.queue(`tool-${id}`, { type: 'TOOL_STREAMING', id, name, streamingContent: '0' });
       }
+      
       const id = streamingToolIds.get(index)!;
-      lastStreamingArgs.set(id, accumulatedArgs);
       const lineCount = (accumulatedArgs.match(/\\n/g) || []).length;
+      const streamingContent = String(lineCount);
 
-      pendingStreamingUpdate = () => {
-        dispatch({ type: 'TOOL_STREAMING', id, name, streamingContent: String(lineCount) });
-      };
-      if (!streamingThrottleTimer) {
-        streamingThrottleTimer = setTimeout(() => {
-          flushStreamingUpdate();
-        }, 80);
+      if (lastStreamingValues.get(id) !== streamingContent) {
+        lastStreamingValues.set(id, streamingContent);
+        // CRITICAL: Update the offline store directly
+        progressStore.update({ name, progress: `${streamingContent} lines` });
       }
     },
 
     onToolExecuting: (name: string, params: Record<string, unknown>) => {
-      flushStreamingUpdate();
-      contentBatcher.flush();
-      thoughtBatcher.flush();
-      contentBatcher.pause();
-      thoughtBatcher.pause();
+      progressStore.update(undefined); // Clear progress when tool starts execution
+      batcher.flush();
       const existingId = activeToolIds.get(name);
       const id = existingId || `tool-${++toolCallCounter}`;
       activeToolIds.set(name, id);
+      lastStreamingValues.set(id, JSON.stringify(params));
       dispatch({ type: 'TOOL_EXECUTING', id, name, params });
     },
 
     onToolResult: (name: string, result: string, truncated: boolean) => {
+      progressStore.update(undefined); // Clear progress on result
+      batcher.flush();
       const id = activeToolIds.get(name) || `tool-${++toolCallCounter}`;
       const lines = result.split('\n');
       const isWriteTool = name === 'write-file' || name === 'edit-file';
       let summary: string;
       if (isWriteTool) {
-        const code = extractCodeFromArgs(name, lastStreamingArgs.get(id) || '');
+        const stored = lastStreamingValues.get(id) || '';
+        const code = extractCodeFromArgs(name, stored);
         const codeLines = code ? code.split('\n').length : 0;
         summary = codeLines > 0 ? `${codeLines} lines` : (truncated ? 'truncated' : `${lines.length} lines`);
       } else {
@@ -314,19 +301,18 @@ export function createBridgeCallbacks(dispatch: Dispatch<TuiAction>): AgentCallb
     },
 
     onDenied: (toolName: string, feedback?: string) => {
+      batcher.flush();
       const id = activeToolIds.get(toolName) || `tool-${++toolCallCounter}`;
       dispatch({ type: 'TOOL_DENIED', id, feedback });
     },
 
     onError: (err: Error) => {
-      contentBatcher.stop();
-      thoughtBatcher.stop();
+      batcher.stop();
       dispatch({ type: 'SET_ERROR', error: err.message });
     },
 
     _stopBatcher: () => {
-      contentBatcher.stop();
-      thoughtBatcher.stop();
+      batcher.stop();
     },
   };
 }

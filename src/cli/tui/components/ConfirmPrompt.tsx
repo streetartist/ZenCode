@@ -152,7 +152,7 @@ export function ConfirmPrompt({ confirm, onRespond }: ConfirmPromptProps) {
 
   if (feedbackMode) {
     return (
-      <Box flexDirection="column" paddingX={0} marginY={1}>
+      <Box flexDirection="column" paddingX={0} marginY={0}>
         <Box backgroundColor="#fe8019" paddingX={1}>
           <Text color="#282828" bold> FEEDBACK </Text>
         </Box>
@@ -166,7 +166,7 @@ export function ConfirmPrompt({ confirm, onRespond }: ConfirmPromptProps) {
           {lines.map((line, i) => (
             <Text key={i} color="#a89984">{line}</Text>
           ))}
-          <Box marginTop={1} gap={1}>
+          <Box marginTop={0} gap={1}>
             <Text color="#83a598" bold>Reason: </Text>
             <FeedbackInput
               onSubmit={(text) => {
@@ -188,7 +188,7 @@ export function ConfirmPrompt({ confirm, onRespond }: ConfirmPromptProps) {
   }
 
   return (
-    <Box flexDirection="column" paddingX={0} marginY={1}>
+    <Box flexDirection="column" paddingX={0} marginY={0}>
       <Box backgroundColor="#fe8019" paddingX={1}>
         <Text color="#282828" bold> CONFIRMATION REQUIRED </Text>
       </Box>
@@ -203,7 +203,7 @@ export function ConfirmPrompt({ confirm, onRespond }: ConfirmPromptProps) {
           <Text key={i} color="#a89984">{line}</Text>
         ))}
 
-        <Box marginTop={1} gap={2} justifyContent="center">
+        <Box marginTop={0} gap={2} justifyContent="center">
           {OPTIONS.map((opt, i) => {
             const isSelected = i === selected;
             const optColor = opt.key === 'deny' ? '#fb4934' : opt.key === 'allow' ? '#b8bb26' : '#8ec07c';

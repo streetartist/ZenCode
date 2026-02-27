@@ -37,10 +37,25 @@ let globalConfirmHandler: ConfirmHandler = async () => false;
 let structuredConfirmHandler: StructuredConfirmHandler | null = null;
 
 /**
+ * 正在等待确认的 Promise resolve 函数
+ */
+let pendingConfirmResolver: ((result: ConfirmExecutionResult) => void) | null = null;
+
+/**
  * 设置全局确认处理函数
  */
 export function setConfirmHandler(handler: ConfirmHandler): void {
   globalConfirmHandler = handler;
+}
+
+/**
+ * 强行取消当前正在等待的工具确认（通常用于 Ctrl+C 中断）
+ */
+export function cancelPendingConfirmation(): void {
+  if (pendingConfirmResolver) {
+    pendingConfirmResolver({ approved: false });
+    pendingConfirmResolver = null;
+  }
 }
 
 /**
@@ -106,7 +121,16 @@ export async function confirmExecution(
 ): Promise<ConfirmExecutionResult> {
   // TUI 模式：使用结构化 handler，跳过 stderr 输出
   if (structuredConfirmHandler) {
-    return structuredConfirmHandler(toolName, params);
+    const result = await new Promise<ConfirmExecutionResult>((resolve) => {
+      pendingConfirmResolver = resolve;
+      structuredConfirmHandler!(toolName, params).then(res => {
+        if (pendingConfirmResolver === resolve) {
+          pendingConfirmResolver = null;
+          resolve(res);
+        }
+      });
+    });
+    return result;
   }
 
   // REPL 模式：格式化并输出到 stderr

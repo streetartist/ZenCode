@@ -1,6 +1,6 @@
 {
   "name": "zencode-cli",
-  "version": "0.2.3",
+  "version": "0.4.1",
   "description": "极简 CLI AI 编程工具 - 用最少的提示词，让模型把全部能力集中在编程本身",
   "type": "module",
   "bin": {

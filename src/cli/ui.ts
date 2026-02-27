@@ -1,19 +1,42 @@
 import chalk from 'chalk';
 import ora, { type Ora } from 'ora';
-import { marked } from 'marked';
+import { Marked } from 'marked';
 import * as _markedTerminal from 'marked-terminal';
 import { createTwoFilesPatch } from 'diff';
 
 // 配置 marked 使用终端渲染器
-// marked-terminal v7: named export 'markedTerminal' is the factory, default is the old Renderer class
-const markedTerminal = (_markedTerminal as any).markedTerminal as () => any;
-marked.use(markedTerminal());
+const markedTerminal = (_markedTerminal as any).markedTerminal as (options?: any) => any;
+const marked = new Marked(markedTerminal({
+  reflowText: false,
+  code: chalk.cyan,
+  codespan: chalk.yellow,
+  heading: chalk.bold.magenta,
+  hr: () => chalk.dim('─'.repeat(Math.max(0, (process.stdout.columns || 80) - 12))),
+  strong: chalk.bold,
+  em: chalk.italic,
+  link: chalk.blue,
+  href: chalk.blue.underline,
+}));
+
+// 补充修复: 确保列表项中的嵌套行内元素（如加粗）能正确渲染
+marked.use({
+  renderer: {
+    text(this: any, token: any) {
+      if (typeof token === 'object' && token.tokens) {
+        return this.parser.parseInline(token.tokens);
+      }
+      return typeof token === 'string' ? token : token.text;
+    }
+  }
+});
 
 /**
  * 渲染 Markdown 到终端
  */
 export function renderMarkdown(text: string): string {
-  return (marked.parse(text) as string).trim();
+  const rendered = (marked.parse(text) as string) as string;
+  // 移除末尾换行，由 ink 组件控制布局
+  return rendered.replace(/\n+$/, '');
 }
 
 /**

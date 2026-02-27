@@ -28,7 +28,7 @@ function getStatusColor(status: string): string {
   }
 }
 
-export function TodoPanel({ plan }: TodoPanelProps) {
+export const TodoPanel = React.memo(function TodoPanel({ plan }: TodoPanelProps) {
   const completed = plan.items.filter((i) => i.status === 'completed').length;
   const total = plan.items.length;
 
@@ -38,9 +38,10 @@ export function TodoPanel({ plan }: TodoPanelProps) {
       borderStyle="round"
       borderColor="#83a598"
       paddingX={1}
-      marginY={1}
+      marginY={0}
+      width="100%"
     >
-      <Box justifyContent="space-between" marginBottom={1}>
+      <Box justifyContent="space-between" marginBottom={0}>
         <Text bold color="#83a598">
           PROJECT PLAN
         </Text>
@@ -65,4 +66,7 @@ export function TodoPanel({ plan }: TodoPanelProps) {
       ))}
     </Box>
   );
-}
+}, (prev, next) => {
+  // 核心优化：只要计划没变，无论外界状态怎么跳动，绝不重绘
+  return prev.plan === next.plan;
+});

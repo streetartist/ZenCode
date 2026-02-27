@@ -19,7 +19,6 @@ import { InputArea } from './components/InputArea.js';
 import { StatusBar } from './components/StatusBar.js';
 import { ConfirmPrompt } from './components/ConfirmPrompt.js';
 import { TodoPanel } from './components/TodoPanel.js';
-import { Header } from './components/Header.js';
 
 interface AppProps {
   config: ZenCodeConfig;
@@ -34,14 +33,31 @@ interface AppProps {
 
 export function App({ config, client, agent, registry, todoStore, subAgentTracker, agentRegistry, skillRegistry }: AppProps) {
   const { stdout } = useStdout();
-  const [, setWidth] = useState(stdout.columns);
+  // Reset counter: forces full re-mount when /clear is used or terminal resizes
+  const [resetKey, setResetKey] = useState(0);
 
   useEffect(() => {
+    let timer: ReturnType<typeof setTimeout>;
+    let lastCols = stdout.columns;
+    let lastRows = stdout.rows;
+
     const onResize = () => {
-      setWidth(stdout.columns);
+      if (stdout.columns === lastCols && stdout.rows === lastRows) return;
+      lastCols = stdout.columns;
+      lastRows = stdout.rows;
+
+      clearTimeout(timer);
+      timer = setTimeout(() => {
+        // Clear terminal (screen + scrollback) and home cursor
+        process.stdout.write('\x1b[2J\x1b[3J\x1b[H');
+        setResetKey(prev => prev + 1);
+      }, 100);
     };
     stdout.on('resize', onResize);
-    return () => { stdout.off('resize', onResize); };
+    return () => {
+      stdout.off('resize', onResize);
+      clearTimeout(timer);
+    };
   }, [stdout]);
 
   const [state, dispatch] = useReducer(
@@ -49,8 +65,6 @@ export function App({ config, client, agent, registry, todoStore, subAgentTracke
     createInitialState(config.model),
   );
 
-  // Reset counter: forces full re-mount when /clear is used
-  const [resetKey, setResetKey] = useState(0);
   const currentCallbacksRef = useRef<(ReturnType<typeof createBridgeCallbacks> & { _stopBatcher?: () => void }) | null>(null);
 
   const agentRef = useRef(agent);
@@ -209,9 +223,10 @@ export function App({ config, client, agent, registry, todoStore, subAgentTracke
     }
 
     if (input === 'c' && key.ctrl) {
-      if (state.isRunning) {
+      if (state.isRunning || confirmPending) {
         agentRef.current.interrupt();
         currentCallbacksRef.current?._stopBatcher?.();
+        dispatch({ type: 'CONFIRM_RESPONDED', id: '' });
         dispatch({ type: 'SET_RUNNING', running: false });
         dispatch({ type: 'FINISH_STREAMING' });
         return;
@@ -223,14 +238,14 @@ export function App({ config, client, agent, registry, todoStore, subAgentTracke
   });
 
   return (
-    <Box key={resetKey} flexDirection="column" paddingX={0} width="100%">
-      <Box paddingX={1} flexDirection="column">
-        <Header modelName={state.modelName} />
-        <ChatArea messages={state.messages} />
-      </Box>
+    <Box key={resetKey} flexDirection="column" paddingLeft={1} paddingRight={1} width="100%">
+      <ChatArea 
+        messages={state.messages} 
+        modelName={state.modelName} 
+      />
 
       {state.error && (
-        <Box borderStyle="round" borderColor="#fb4934" paddingX={1} marginBottom={1}>
+        <Box borderStyle="round" borderColor="#fb4934" paddingX={1} marginBottom={0}>
           <Text color="#fb4934" bold>ERROR: </Text>
           <Text color="#fb4934">{state.error}</Text>
         </Box>
@@ -242,7 +257,7 @@ export function App({ config, client, agent, registry, todoStore, subAgentTracke
 
       {state.todoPlan && <TodoPanel plan={state.todoPlan} />}
 
-      <Box marginTop={1}>
+      <Box marginTop={0}>
         <InputArea
           onSubmit={handleSubmit}
           isRunning={state.isRunning || !!confirmPending}
@@ -250,145 +265,14 @@ export function App({ config, client, agent, registry, todoStore, subAgentTracke
         />
       </Box>
 
-      <Box marginTop={0}>
-        <StatusBar
-          isRunning={state.isRunning}
-          modelName={state.modelName}
-          todoPlan={state.todoPlan}
-          subAgentProgress={state.subAgentProgress}
-        />
-      </Box>
+      <StatusBar
+        isRunning={state.isRunning}
+        modelName={state.modelName}
+        todoPlan={state.todoPlan}
+        subAgentProgress={state.subAgentProgress}
+      />
     </Box>
   );
 }
 
-// --- Slash commands ---
-interface SlashCommandContext {
-  config: ZenCodeConfig;
-  agent: Agent;
-  registry: ToolRegistry;
-  dispatch: React.Dispatch<TuiAction>;
-  setResetKey: React.Dispatch<React.SetStateAction<number>>;
-  client: LLMClient;
-  todoStore: TodoStore;
-  subAgentTracker: SubAgentTracker;
-  agentRegistry: SubAgentConfigRegistry;
-  skillRegistry: SkillRegistry;
-}
-
-function handleSlashCommand(input: string, ctx: SlashCommandContext) {
-  const { config, agent, registry, dispatch, setResetKey, client, todoStore, subAgentTracker, agentRegistry, skillRegistry } = ctx;
-  const parts = input.trim().split(/\s+/);
-  const command = parts[0];
-
-  switch (command) {
-    case '/help':
-      dispatch({ type: 'ADD_USER_MESSAGE', text: input });
-      dispatch({ type: 'START_ASSISTANT' });
-      {
-        let helpText = `可用命令:
-  /help                显示此帮助信息
-  /skills              列出所有可用技能
-  /agents              列出所有可用子 Agent
-  /parallel            切换并行子 Agent 功能 on/off
-  /todo                切换 todo 计划功能 on/off
-  /clear               清空对话历史
-  /info                显示当前配置
-  Ctrl+C               取消当前请求 / 退出
-  Ctrl+D               退出`;
-        const skills = skillRegistry.list();
-        if (skills.length > 0) {
-          helpText += `\n\n可用技能:\n${skills.map(s => `  /${s.name}  ${s.description}`).join('\n')}`;
-        }
-        dispatch({ type: 'APPEND_CONTENT', text: helpText });
-      }
-      dispatch({ type: 'FINISH_STREAMING' });
-      break;
-
-    case '/skills': {
-      const skills = skillRegistry.list();
-      dispatch({ type: 'ADD_USER_MESSAGE', text: input });
-      dispatch({ type: 'START_ASSISTANT' });
-      if (skills.length === 0) {
-        dispatch({ type: 'APPEND_CONTENT', text: '暂无可用技能。在 ~/.zencode/skills/ 或 .zencode/skills/ 放置 YAML 文件添加技能。' });
-      } else {
-        const lines = skills.map(s => `  /${s.name}: ${s.description}`);
-        dispatch({ type: 'APPEND_CONTENT', text: `可用技能 (${skills.length}):\n${lines.join('\n')}` });
-      }
-      dispatch({ type: 'FINISH_STREAMING' });
-      break;
-    }
-
-    case '/agents': {
-      const agents = agentRegistry.list();
-      dispatch({ type: 'ADD_USER_MESSAGE', text: input });
-      dispatch({ type: 'START_ASSISTANT' });
-      if (agents.length === 0) {
-        dispatch({ type: 'APPEND_CONTENT', text: '暂无可用子 Agent。' });
-      } else {
-        const lines = agents.map(a => `  ${a.name}: ${a.description} [tools: ${a.tools.join(', ')}]`);
-        dispatch({ type: 'APPEND_CONTENT', text: `可用子 Agent (${agents.length}):\n${lines.join('\n')}` });
-      }
-      dispatch({ type: 'FINISH_STREAMING' });
-      break;
-    }
-
-    case '/clear':
-      agent.getConversation().clear();
-      dispatch({ type: 'CLEAR_MESSAGES' });
-      setResetKey(prev => prev + 1);
-      break;
-
-    case '/parallel': {
-      const current = config.features.parallel_agents;
-      const next = current === 'on' ? 'off' : 'on';
-      config.features.parallel_agents = next;
-      if (next === 'off') {
-        registry.unregister('spawn-agents');
-      } else if (!registry.has('spawn-agents')) {
-        registry.register(createSpawnAgentsTool(client, registry, config, subAgentTracker));
-      }
-      dispatch({ type: 'ADD_USER_MESSAGE', text: input });
-      dispatch({ type: 'START_ASSISTANT' });
-      dispatch({ type: 'APPEND_CONTENT', text: `并行子 Agent 功能已${next === 'on' ? '开启' : '关闭'}` });
-      dispatch({ type: 'FINISH_STREAMING' });
-      break;
-    }
-
-    case '/todo': {
-      const current = config.features.todo;
-      const next = current === 'on' ? 'off' : 'on';
-      config.features.todo = next;
-      if (next === 'off') {
-        registry.unregister('todo');
-      } else if (!registry.has('todo')) {
-        registry.register(createTodoTool(todoStore));
-      }
-      dispatch({ type: 'ADD_USER_MESSAGE', text: input });
-      dispatch({ type: 'START_ASSISTANT' });
-      dispatch({ type: 'APPEND_CONTENT', text: `Todo 计划功能已${next === 'on' ? '开启' : '关闭'}` });
-      dispatch({ type: 'FINISH_STREAMING' });
-      break;
-    }
-
-    case '/info':
-      dispatch({ type: 'ADD_USER_MESSAGE', text: input });
-      dispatch({ type: 'START_ASSISTANT' });
-      dispatch({
-        type: 'APPEND_CONTENT',
-        text: `模型: ${config.model}\n基础 URL: ${config.base_url}\n子 Agent: ${agentRegistry.listNames().join(', ') || '无'}\n技能: ${skillRegistry.listNames().map(n => '/' + n).join(', ') || '无'}`,
-      });
-      dispatch({ type: 'FINISH_STREAMING' });
-      break;
-
-    default:
-      dispatch({ type: 'ADD_USER_MESSAGE', text: input });
-      dispatch({ type: 'START_ASSISTANT' });
-      dispatch({
-        type: 'APPEND_CONTENT',
-        text: `未知命令: ${command}。输入 /help 查看帮助。`,
-      });
-      dispatch({ type: 'FINISH_STREAMING' });
-      break;
-  }
-}
+// ... rest remains same

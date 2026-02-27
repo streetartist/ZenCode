@@ -67,25 +67,41 @@ export class Agent {
         callbacks,
       );
 
+      // 过滤并处理工具调用
+      const validToolCalls: typeof assistantMsg.tool_calls = [];
+      const invalidToolCalls: typeof assistantMsg.tool_calls = [];
+      if (assistantMsg.tool_calls) {
+        for (const toolCall of assistantMsg.tool_calls) {
+          try {
+            JSON.parse(toolCall.function.arguments);
+            validToolCalls.push(toolCall);
+          } catch {
+            invalidToolCalls.push(toolCall);
+          }
+        }
+      }
+
+      // 更新消息中的工具调用为仅包含合法 JSON 的调用，避免后续请求 400 错误
+      assistantMsg.tool_calls = validToolCalls.length > 0 ? validToolCalls : undefined;
       this.conversation.addAssistantMessage(assistantMsg);
 
-      // 如果没有工具调用，结束循环
-      if (!assistantMsg.tool_calls || assistantMsg.tool_calls.length === 0) {
+      // 对于无效的工具调用，通知 UI 显示错误，但不加入对话历史
+      for (const toolCall of invalidToolCalls) {
+        callbacks.onToolResult?.(toolCall.function.name, `参数解析失败：无效的 JSON 字符串\n${toolCall.function.arguments}`, false);
+      }
+
+      // 如果没有有效的工具调用，结束循环
+      if (validToolCalls.length === 0) {
         lastContent = assistantMsg.content || '';
         break;
       }
 
-      // 执行所有工具调用
-      for (const toolCall of assistantMsg.tool_calls) {
+      // 执行所有有效的工具调用
+      for (const toolCall of validToolCalls) {
         if (this.interrupted) break;
         const toolName = toolCall.function.name;
-        let params: Record<string, unknown>;
-        try {
-          params = JSON.parse(toolCall.function.arguments);
-        } catch {
-          this.conversation.addToolResult(toolCall.id, '参数解析失败：无效的 JSON');
-          continue;
-        }
+        // 此时 JSON.parse 必然成功
+        const params: Record<string, unknown> = JSON.parse(toolCall.function.arguments);
 
         try {
           // 先读后改：edit-file 必须先 read-file

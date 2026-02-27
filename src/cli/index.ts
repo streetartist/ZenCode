@@ -101,7 +101,7 @@ export function createCli(): Command {
   program
     .name('zencode')
     .description('极简 CLI AI 编程工具')
-    .version('0.2.3')
+    .version('0.4.1')
     .option('-m, --model <model>', '指定模型名称')
     .option('-k, --api-key <key>', 'API 密钥')
     .option('-u, --base-url <url>', 'API 基础 URL')
@@ -130,6 +130,8 @@ export function createCli(): Command {
       } else {
         // 全屏 TUI 模式（默认）
         const { startTui } = await import('./tui/index.js');
+        // Clear terminal for a clean start
+        process.stdout.write('\x1Bc');
         await startTui({ config });
       }
     });

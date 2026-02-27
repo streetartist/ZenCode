@@ -1,5 +1,5 @@
 import React, { useRef, useState } from 'react';
-import { Box, Text, useInput } from 'ink';
+import { Box, Text, useInput, useStdout } from 'ink';
 
 interface InputAreaProps {
   onSubmit: (text: string) => void;
@@ -11,20 +11,21 @@ interface InputAreaProps {
 /**
  * Custom text input that only accepts printable characters.
  */
-function CleanTextInput({ 
-  onSubmit, 
-  placeholder, 
-  onExitRequest, 
-  onScroll 
-}: { 
-  onSubmit: (text: string) => void; 
-  placeholder?: string; 
+function CleanTextInput({
+  onSubmit,
+  placeholder,
+  onExitRequest,
+  onScroll
+}: {
+  onSubmit: (text: string) => void;
+  placeholder?: string;
   onExitRequest: () => void;
   onScroll?: (direction: 'up' | 'down') => void;
 }) {
   const [value, setValue] = useState('');
   const [cursor, setCursor] = useState(0);
   const lastCtrlCAtRef = useRef(0);
+  const pastedTextsRef = useRef<string[]>([]);
 
   useInput((input, key) => {
     // Scroll handling
@@ -44,6 +45,7 @@ function CleanTextInput({
         setValue('');
         setCursor(0);
         lastCtrlCAtRef.current = 0;
+        pastedTextsRef.current = [];
         return;
       }
 
@@ -59,12 +61,19 @@ function CleanTextInput({
     }
 
     if (key.return) {
-      const trimmed = value.trim();
+      let trimmed = value.trim();
       if (trimmed) {
+        // Expand [pasted text#N] placeholders with actual stored text
+        const stored = pastedTextsRef.current;
+        trimmed = trimmed.replace(/\[pasted text#(\d+)\]/g, (_match, numStr) => {
+          const idx = parseInt(numStr, 10) - 1;
+          return idx >= 0 && idx < stored.length ? stored[idx] : _match;
+        });
         onSubmit(trimmed);
       }
       setValue('');
       setCursor(0);
+      pastedTextsRef.current = [];
       return;
     }
     if (key.backspace || key.delete) {
@@ -80,10 +89,27 @@ function CleanTextInput({
     if (input === 'e' && key.ctrl) { setCursor(value.length); return; }
     if (input === 'u' && key.ctrl) { setValue(prev => prev.slice(cursor)); setCursor(0); return; }
 
+    // Multi-line paste detection
+    if (input.includes('\n') || input.includes('\r')) {
+      // Clean escape sequences and normalize newlines
+      const cleaned = input
+        .replace(/\x1b\[[0-9;]*[A-Za-z]/g, '')
+        .replace(/\r\n/g, '\n')
+        .replace(/\r/g, '\n')
+        .trim();
+      if (cleaned.length > 0) {
+        pastedTextsRef.current.push(cleaned);
+        const placeholder = `[pasted text#${pastedTextsRef.current.length}]`;
+        setValue(prev => prev.slice(0, cursor) + placeholder + prev.slice(cursor));
+        setCursor(prev => prev + placeholder.length);
+      }
+      return;
+    }
+
     if (key.ctrl || key.meta || key.escape) return;
     if (!input || input.length === 0) return;
     if (input.includes('\x1b') || input.includes('\x00')) return;
-    
+
     // Filter out some common terminal escape sequences
     if (/^(?:\[<\d+;\d+;\d+[Mm])+$/.test(input)) return;
     if (/^\[<[0-9;Mm]*$/.test(input)) return;
@@ -101,10 +127,10 @@ function CleanTextInput({
 
   if (value.length === 0) {
     return (
-      <>
+      <Text wrap="wrap">
         <Text inverse> </Text>
         <Text dimColor>{placeholder || ''}</Text>
-      </>
+      </Text>
     );
   }
 
@@ -113,27 +139,26 @@ function CleanTextInput({
   const after = cursor < value.length ? value.slice(cursor + 1) : '';
 
   return (
-    <>
-      <Text>{before}</Text>
-      <Text inverse>{at}</Text>
-      <Text>{after}</Text>
-    </>
+    <Text wrap="wrap">
+      {before}<Text inverse>{at}</Text>{after}
+    </Text>
   );
 }
 
-export function InputArea({ onSubmit, isRunning, onExitRequest, onScroll }: InputAreaProps) {
+export const InputArea = React.memo(function InputArea({ onSubmit, isRunning, onExitRequest, onScroll }: InputAreaProps) {
+  const { stdout } = useStdout();
+  // Label box: paddingX(1) + " INPUT "(7) + paddingX(1) = 9 cols, + marginRight(1) = 10
+  const labelCols = 10;
+  const textWidth = (stdout?.columns ?? 80) - 2 - labelCols;
+
   return (
     <Box paddingX={0}>
       <Box backgroundColor={isRunning ? "#504945" : "#b8bb26"} paddingX={1} marginRight={1}>
         <Text color="#282828" bold>{isRunning ? " WAIT " : " INPUT "}</Text>
       </Box>
-      <Box flexGrow={1}>
+      <Box width={textWidth}>
         {isRunning ? (
-          <Box flexGrow={1} onWheel={(event) => {
-            // Ink handles wheel? Not really, but just in case for future.
-          }}>
-            <Text color="#a89984" italic>Thinking...</Text>
-          </Box>
+          <Text color="#a89984" italic>Thinking...</Text>
         ) : (
           <CleanTextInput
             onSubmit={onSubmit}
@@ -145,4 +170,4 @@ export function InputArea({ onSubmit, isRunning, onExitRequest, onScroll }: Inpu
       </Box>
     </Box>
   );
-}
+});

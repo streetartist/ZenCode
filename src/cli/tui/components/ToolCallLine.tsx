@@ -49,7 +49,7 @@ function truncateContent(text: string, maxLines: number): string[] {
   return result;
 }
 
-export function ToolCallLine({ toolCall }: ToolCallLineProps) {
+export const ToolCallLine = React.memo(function ToolCallLine({ toolCall }: ToolCallLineProps) {
   const { name, params, status, resultContent, denyFeedback } = toolCall;
   const summary = getToolParamSummary(name, params);
 
@@ -79,10 +79,10 @@ export function ToolCallLine({ toolCall }: ToolCallLineProps) {
 
   return (
     <Box flexDirection="column" marginTop={0} marginBottom={1} width="100%">
-      <Box 
-        flexDirection="column" 
-        borderStyle="round" 
-        borderColor={borderColor} 
+      <Box
+        flexDirection="column"
+        borderStyle="round"
+        borderColor={borderColor}
         paddingX={1}
         width="100%"
       >
@@ -117,4 +117,4 @@ export function ToolCallLine({ toolCall }: ToolCallLineProps) {
       </Box>
     </Box>
   );
-}
+});

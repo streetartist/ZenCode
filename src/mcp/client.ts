@@ -74,7 +74,7 @@ export class McpClient extends EventEmitter {
       this.sendRequest('initialize', {
         protocolVersion: '2024-11-05',
         capabilities: {},
-        clientInfo: { name: 'zencode', version: '0.2.3' },
+        clientInfo: { name: 'zencode', version: '0.4.1' },
       }).then(() => {
         // 发送 initialized 通知
         this.sendNotification('notifications/initialized');
